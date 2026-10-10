@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifySessions, FINISHED_SUBAGENT_GRACE_MS, isActiveCategory, isFinishedSubagentHidden, sessionState } from '../public/session-state.js';
+import { buildSessionTree, classifySessions, FINISHED_SUBAGENT_GRACE_MS, isActiveCategory, isFinishedSubagentHidden, sessionState } from '../public/session-state.js';
 
 test('an idle parent awaiting input is distinct from its three finished subagents', () => {
   const parent = { id: 'main', status: 'idle', activity: 'Ready' };
@@ -104,4 +104,15 @@ test('parent summaries inherit attention from children and nested descendants', 
   assert.equal(isActiveCategory(classified.get('root')), true);
   assert.equal(sessionState(sessions[2], true, classified.get('grandchild')).label, 'Error · attention required');
   assert.deepEqual(sessions.map(s => s.status), ['idle', 'busy', 'error']);
+});
+
+test('session trees retain deep nesting and orphans while breaking cycles deterministically', () => {
+  const sessions = [
+    { id: 'root' }, { id: 'child', parentID: 'root' }, { id: 'grandchild', parentID: 'child' },
+    { id: 'orphan', parentID: 'missing' }, { id: 'cycle-a', parentID: 'cycle-b' }, { id: 'cycle-b', parentID: 'cycle-a' },
+  ];
+  const roots = buildSessionTree(sessions);
+  const flatten = nodes => nodes.flatMap(node => [node.session.id, ...flatten(node.children)]);
+  assert.deepEqual(flatten(roots), ['root', 'child', 'grandchild', 'orphan', 'cycle-a', 'cycle-b']);
+  assert.deepEqual(roots.map(node => node.session.id), ['root', 'orphan', 'cycle-a']);
 });

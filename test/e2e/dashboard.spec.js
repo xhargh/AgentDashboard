@@ -155,3 +155,39 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
   await expect(details).toHaveAttribute('open', '');
   await expect(details.getByRole('heading', { name: 'Recent commits' })).toBeVisible();
 });
+
+test('renders nested agents, preserves expansion, surfaces descendant attention, and keeps orphans and cycles accessible', async ({ page }) => {
+  let polls = 0;
+  await installStateFixture(page, () => {
+    polls += 1;
+    const state = report(polls > 1 ? 'Build dashboard updated' : 'Build dashboard');
+    state.instances[0].sessions.push(
+      { id: 'deep-agent', parentID: 'child-alpha', title: 'Deep agent', status: 'waiting', directory: '/work/alpha/app', activity: 'Needs approval' },
+      { id: 'orphan-agent', parentID: 'missing-parent', title: 'Orphan agent', status: 'busy', directory: '/work/alpha/app', activity: 'Working' },
+      { id: 'cycle-a', parentID: 'cycle-b', title: 'Cycle A', status: 'busy', directory: '/work/alpha/app', activity: 'Working' },
+      { id: 'cycle-b', parentID: 'cycle-a', title: 'Cycle B', status: 'busy', directory: '/work/alpha/app', activity: 'Working' },
+    );
+    return state;
+  });
+  await page.goto('/');
+
+  const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
+  await expect(root).toBeVisible();
+  await expect(root.locator('summary')).toContainText('Attention in this branch');
+  await root.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('details[data-agent-key="instance-alpha:child-alpha"]')).toBeVisible();
+  const child = page.locator('details[data-agent-key="instance-alpha:child-alpha"]');
+  await child.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Deep agent', { exact: true })).toBeVisible();
+  await expect(page.getByText('Orphan agent', { exact: true })).toBeVisible();
+  await expect(page.getByText('Cycle A', { exact: true })).toBeVisible();
+  const cycle = page.locator('details[data-agent-key="instance-alpha:cycle-a"]');
+  await cycle.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Cycle B', { exact: true })).toBeVisible();
+  await expect(page.getByText('Build dashboard updated', { exact: true })).toBeVisible();
+  await expect(root).toHaveAttribute('open', '');
+  await expect(child).toHaveAttribute('open', '');
+});
