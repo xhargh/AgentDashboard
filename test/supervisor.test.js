@@ -87,6 +87,46 @@ test('plugin refuses remote telemetry without a token', async t => {
   process.env.OPENCODE_SUPERVISOR_URL = 'http://192.168.1.10:4317';
   assert.deepEqual(await SupervisorPlugin({ directory: '/tmp' }), {});
 });
+test('plugin classifies HTTP, network, and timeout report failures without leaking details', async t => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const oldUrl = process.env.OPENCODE_SUPERVISOR_URL;
+  const oldToken = process.env.OPENCODE_SUPERVISOR_TOKEN;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+    if (oldUrl === undefined) delete process.env.OPENCODE_SUPERVISOR_URL;
+    else process.env.OPENCODE_SUPERVISOR_URL = oldUrl;
+    if (oldToken === undefined) delete process.env.OPENCODE_SUPERVISOR_TOKEN;
+    else process.env.OPENCODE_SUPERVISOR_TOKEN = oldToken;
+  });
+  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
+  process.env.OPENCODE_SUPERVISOR_TOKEN = 'secret-token-that-must-not-be-logged';
+
+  const cases = [
+    [401, 'authentication (HTTP 401)'], [403, 'authentication (HTTP 403)'],
+    [400, 'rejected report (HTTP 400)'], [413, 'rejected report (HTTP 413)'],
+    [500, 'server failure (HTTP 500)'], [503, 'server failure (HTTP 503)'],
+    ['network', 'network failure'], ['timeout', 'timeout'],
+  ];
+  for (const [failure, expected] of cases) {
+    const warnings = [];
+    console.warn = message => warnings.push(message);
+    globalThis.fetch = async () => {
+      if (failure === 'network') throw new TypeError('private network details');
+      if (failure === 'timeout') {
+        const error = new Error('private timeout details'); error.name = 'TimeoutError'; throw error;
+      }
+      return new Response('private response body', { status: failure });
+    };
+    const plugin = await SupervisorPlugin({ directory: '/tmp' });
+    for (let n = 0; n < 100 && warnings.length === 0; n++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(warnings.length, 1, `${failure} should produce one diagnostic`);
+    assert.match(warnings[0], new RegExp(expected.replace(/[()]/g, '\\$&')));
+    assert.doesNotMatch(warnings[0], /secret-token|private/);
+    await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } });
+  }
+});
 test('local mode allows token-free reports and rejects remote peers, rebinding and foreign origins', async t => {
   const { dispatch } = await start(t, { token: undefined });
   assert.equal((await dispatch('/api/report', { method: 'POST', body: JSON.stringify(report()) })).status, 200);

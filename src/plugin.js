@@ -24,6 +24,22 @@ async function inspectGit(cwd) {
   } catch { return { unavailable: 'Not a Git repository, Git unavailable, or repository inaccessible' }; }
 }
 
+function reportFailure(response) {
+  const status = response.status;
+  if (status === 401 || status === 403) return `authentication (HTTP ${status})`;
+  if (status === 400 || status === 413) return `rejected report (HTTP ${status})`;
+  if (status >= 500 && status <= 599) return `server failure (HTTP ${status})`;
+  return `HTTP failure (${status})`;
+}
+function transportFailure(error) {
+  return error?.name === 'TimeoutError' || error?.name === 'AbortError'
+    ? 'timeout' : 'network failure';
+}
+function reportWarning(category) {
+  // Deliberately omit request/response bodies, credentials, and error messages.
+  console.warn(`[OpenCode Supervisor] Telemetry report failed: ${category}`);
+}
+
 export const SupervisorPlugin = async ({ directory, worktree, client }) => {
   let endpoint;
   try { endpoint = new URL(process.env.OPENCODE_SUPERVISOR_URL || 'http://127.0.0.1:4317'); } catch { return {}; }
@@ -61,8 +77,16 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
         body: JSON.stringify({ instanceId, host: process.env.OPENCODE_SUPERVISOR_HOST || hostname(), pid: process.pid,
           directory, worktree, sessions: [...sessions.values()], git: gitInfo }), signal: AbortSignal.timeout(3000),
       });
+      if (!response.ok) {
+        reportWarning(reportFailure(response));
+        await response.body?.cancel();
+        return;
+      }
       await response.body?.cancel();
-    } catch { /* Monitoring outages do not interrupt agent execution. Next heartbeat retries. */ }
+    } catch (error) {
+      try { reportWarning(transportFailure(error)); } catch { /* Diagnostics must not affect agent execution. */ }
+      // Monitoring outages do not interrupt agent execution. Next heartbeat retries.
+    }
     finally { sending = false; if (dirty && !stopped) { dirty = false; void send(); } }
   }
   function scheduleReport() {
