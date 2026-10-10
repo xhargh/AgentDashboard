@@ -19,7 +19,8 @@ function validReport(v) {
 export function createServer({ token, now = Date.now } = {}) {
   if (token && token.length < 24) throw new Error('SUPERVISOR_TOKEN must contain at least 24 characters');
   const instances = new Map();
-  const prune = () => { for (const [key, v] of instances) if (now() - v.lastSeen > 86400000) instances.delete(key); };
+  let revision = 0;
+  const prune = () => { for (const [key, v] of instances) if (now() - v.lastSeen > 86400000) { instances.delete(key); revision++; } };
   return http.createServer(async (req, res) => {
     const reply = (status, data) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(data)); };
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -39,7 +40,17 @@ export function createServer({ token, now = Date.now } = {}) {
       if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}` && req.headers.origin !== `https://${req.headers.host}`) return reply(403, { error: 'Cross-origin request rejected' });
       if (req.headers['sec-fetch-site'] === 'cross-site') return reply(403, { error: 'Cross-site request rejected' });
       prune();
-      if (path === '/api/state' && req.method === 'GET') return reply(200, { instances: [...instances.values()].map(v => ({ ...v, online: now() - v.lastSeen < 20000 })), serverTime: now(), mode: token ? 'network' : 'local' });
+      if (path === '/api/state' && req.method === 'GET') {
+        const time = now();
+        for (const instance of instances.values()) {
+          const online = time - instance.lastSeen < 20000;
+          if (online !== instance.online) { instance.online = online; revision++; }
+        }
+        const etag = `"${revision}"`;
+        res.setHeader('etag', etag);
+        if (req.headers['if-none-match'] === etag) { res.writeHead(304, { 'cache-control': 'no-store' }); return res.end(); }
+        return reply(200, { revision, instances: [...instances.values()].map(v => ({ ...v })), serverTime: time, mode: token ? 'network' : 'local' });
+      }
       if (path === '/api/report' && req.method === 'POST') {
         try {
           let size = 0, chunks = [];
@@ -47,7 +58,12 @@ export function createServer({ token, now = Date.now } = {}) {
           const v = JSON.parse(Buffer.concat(chunks).toString());
           if (!validReport(v)) return reply(400, { error: 'Invalid report' });
           if (!instances.has(v.instanceId) && instances.size >= 2000) return reply(503, { error: 'Instance limit reached' });
-          instances.set(v.instanceId, { ...v, lastSeen: now() }); return reply(200, { ok: true });
+          const previous = instances.get(v.instanceId);
+          const online = previous ? now() - previous.lastSeen < 20000 : false;
+          const meaningfulChange = !previous || JSON.stringify({ ...previous, lastSeen: undefined, online: undefined }) !== JSON.stringify(v);
+          instances.set(v.instanceId, { ...v, lastSeen: now(), online: true });
+          if (meaningfulChange || !online) revision++;
+          return reply(200, { ok: true });
         } catch { return reply(400, { error: 'Invalid JSON report' }); }
       }
       return reply(404, { error: 'Unknown endpoint' });

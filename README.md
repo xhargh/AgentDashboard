@@ -8,7 +8,7 @@ A Linux-friendly, browser-based GUI for watching many OpenCode instances across 
 - Shows session titles, agent roles, tool activity, working folders, parent relationships, permission waits, and task lists.
 - Shows Git status, the last 12 commits, and worktrees for each instance's project.
 - The **Agents** section has a collapsible **Filter agents** panel, folded by default. It filters by computer, text, or active sessions, and can hide idle main agents waiting for input. **Hide offline agents** is enabled by default. **Hide finished subagents** is enabled by default: it hides idle subagents, keeps idle main agents visible, and automatically reveals subagents when they resume. Uncheck it to inspect finished sessions. Each project shows how many finished subagents are hidden. Git workspaces show status, recent commits, and worktrees under **Git workspace**; non-Git folders have no Git panel.
-- Reports every five seconds and on events; the GUI polls every two seconds. Missing instances turn offline after 20 seconds and expire after 24 hours.
+- Reports every five seconds and on events; the GUI polls every two seconds. State responses include a monotonic revision and `ETag`; unchanged polls return an empty `304` response. Meaningful report changes, heartbeat-derived online/offline transitions, and instance expiry advance the revision. Missing instances turn offline after 20 seconds and expire after 24 hours.
 
 The GUI runs in Firefox, Chromium, or another modern Linux browser. This is a monitoring application: start OpenCode instances normally in your terminals. It does not launch agents, issue prompts, or modify repositories.
 
@@ -133,7 +133,7 @@ npm test
 npm run smoke
 ```
 
-Tests cover token-free local reporting, automatic dashboard connection, local-only binding, remote/foreign-origin rejection, network login, HTTP authentication and validation, cross-origin rejection, multiple computers, disconnect expiry, plugin session events, parent/subagent relationships, actual Git status/log/worktree collection, and exclusion of raw tool arguments. They invoke the real HTTP request handler in memory so they run without permission to bind ports.
+Tests cover token-free local reporting, automatic dashboard connection, local-only binding, remote/foreign-origin rejection, network login, HTTP authentication and validation, cross-origin rejection, state revisions and conditional responses, multiple computers, disconnect expiry, plugin session events, parent/subagent relationships, actual Git status/log/worktree collection, and exclusion of raw tool arguments. They invoke the real HTTP request handler in memory so they run without permission to bind ports.
 
 `npm run smoke` is a separate real-network test: it starts an isolated OpenCode server with this plugin, creates parent/child sessions through the OpenCode API, and waits for them in the companion. It needs `opencode` on PATH, permission to open localhost ports, and any network access required by OpenCode itself. It makes no LLM calls. Temporary files and processes are cleaned up.
 
