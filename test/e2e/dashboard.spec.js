@@ -2,8 +2,7 @@ import { expect, test } from '@playwright/test';
 
 const token = 'e2e-network-token-with-at-least-24-characters';
 
-function report(title = 'Build dashboard', status = 'busy') {
-  const now = Date.now();
+function report(title = 'Build dashboard', status = 'busy', now = Date.now()) {
   return {
     mode: 'local',
     serverTime: now,
@@ -29,6 +28,17 @@ function report(title = 'Build dashboard', status = 'busy') {
             id: 'child-alpha',
             parentID: 'root-alpha',
             title: 'Finished review',
+            status: 'idle',
+            stateChangedAt: new Date(now - 30_000).toISOString(),
+            directory: '/work/alpha/app',
+            activity: 'Review complete',
+            agent: 'review',
+            todos: [],
+          },
+          {
+            id: 'child-unknown-time',
+            parentID: 'root-alpha',
+            title: 'Unknown-age review',
             status: 'idle',
             directory: '/work/alpha/app',
             activity: 'Review complete',
@@ -75,12 +85,14 @@ async function installStateFixture(page, handler) {
 }
 
 test('local mode connects automatically and filters fleet activity', async ({ page }) => {
-  await installStateFixture(page, () => report());
+  await page.clock.install({ time: new Date(120_000) });
+  await installStateFixture(page, () => report('Build dashboard', 'busy', 120_000));
   await page.goto('/');
 
   await expect(page.getByText('● Connected · local only')).toBeVisible();
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
-  await expect(page.getByText('Finished review')).toHaveCount(0);
+  await expect(page.getByText('Finished review')).toBeVisible();
+  await expect(page.getByText('Unknown-age review')).toBeVisible();
 
   await page.getByText('Filter agents').click();
   await page.getByLabel('Computer').selectOption('beta');
@@ -139,4 +151,18 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
   await expect(page.getByText('Deploy dashboard', { exact: true })).toBeVisible();
   await expect(details).toHaveAttribute('open', '');
   await expect(details.getByRole('heading', { name: 'Recent commits' })).toBeVisible();
+});
+
+test('renders status-only instances with optional metadata omitted', async ({ page }) => {
+  const now = Date.now();
+  await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [{
+    instanceId: 'status-only', machineId: 'machine', host: 'private-host', pid: 42, online: true, lastSeen: now,
+    sessions: [{ id: 'session', status: 'busy' }],
+  }] }));
+  await page.goto('/');
+
+  await expect(page.locator('#fleet article.instance').getByText('private-host', { exact: true })).toBeVisible();
+  await expect(page.getByText('Monitored instance', { exact: true })).toBeVisible();
+  await expect(page.getByText('Session', { exact: true })).toBeVisible();
+  await expect(page.locator('#fleet .badge').getByText('busy', { exact: true })).toBeVisible();
 });

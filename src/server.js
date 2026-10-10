@@ -13,7 +13,8 @@ const LIMITS = Object.freeze({ instances: 2000, sessionsPerReport: 1000, session
 function boundedString(value, max = LIMITS.field) { return typeof value === 'string' && value.length <= max; }
 function validReport(v) {
   return v && typeof v.instanceId === 'string' && v.instanceId.length <= 100 &&
-    (v.machineId === undefined || boundedString(v.machineId, 100)) && boundedString(v.host, 200) && boundedString(v.directory) &&
+    (v.machineId === undefined || boundedString(v.machineId, 100)) && boundedString(v.host, 200) &&
+    (v.directory === undefined || boundedString(v.directory)) &&
     Array.isArray(v.sessions) && v.sessions.length <= LIMITS.sessionsPerReport && v.sessions.every(s => s && boundedString(s.id, 200) &&
       boundedString(s.status, 40) && (s.title === undefined || boundedString(s.title)) && (s.directory === undefined || boundedString(s.directory)) &&
       (s.activity === undefined || boundedString(s.activity)) && (s.agent === undefined || boundedString(s.agent, 200)) &&
