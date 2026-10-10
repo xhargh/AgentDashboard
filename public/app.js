@@ -1,4 +1,4 @@
-import { sessionState } from './session-state.js';
+import { isFinishedSubagentHidden, sessionState } from './session-state.js';
 const $ = id => document.getElementById(id);
 let token = '', instances = [], pending = false, authRequired = false;
 const active = s => ['busy', 'retry', 'waiting'].includes(s.status);
@@ -17,8 +17,8 @@ function render() {
   let hiddenOffline = 0;
   for (const i of instances.filter(i => !selected || i.host === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
     if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
-    const hiddenFinished = $('hide-finished').checked ? i.sessions.filter(s => s.parentID && s.status === 'idle').length : 0;
-    const visible = i.sessions.filter(s => (!$('hide-finished').checked || !s.parentID || s.status !== 'idle') &&
+    const hiddenFinished = $('hide-finished').checked ? i.sessions.filter(s => isFinishedSubagentHidden(s)).length : 0;
+    const visible = i.sessions.filter(s => (!$('hide-finished').checked || !isFinishedSubagentHidden(s)) &&
       (!$('hide-waiting').checked || !i.online || s.parentID || s.status !== 'idle') &&
       (!$('active').checked || (i.online && active(s))) &&
       `${i.host} ${i.directory} ${s.title} ${s.directory} ${s.activity} ${s.agent}`.toLowerCase().includes(query));
