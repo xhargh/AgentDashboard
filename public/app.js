@@ -1,6 +1,6 @@
 import { sessionState } from './session-state.js';
 const $ = id => document.getElementById(id);
-let token = '', instances = [], pending = false, authRequired = false;
+let token = '', instances = [], revision = null, pending = false, authRequired = false;
 const active = s => ['busy', 'retry', 'waiting'].includes(s.status);
 const machineKey = i => i.machineId || `legacy:${i.host}`;
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
@@ -67,24 +67,27 @@ async function poll() {
   const usedToken = token;
   const open = new Set([...document.querySelectorAll('details[open]')].map(n => n.dataset.instance));
   try {
-    const response = await fetch('/api/state', { headers: usedToken ? { authorization: `Bearer ${usedToken}` } : {}, signal: AbortSignal.timeout(5000) });
+    const headers = usedToken ? { authorization: `Bearer ${usedToken}` } : {};
+    if (revision !== null) headers['if-none-match'] = `"${revision}"`;
+    const response = await fetch('/api/state', { headers, signal: AbortSignal.timeout(5000) });
     if (response.status === 401) {
-      authRequired = true; $('login').hidden = false; $('dashboard').hidden = true; $('logout').hidden = true;
+      revision = null; authRequired = true; $('login').hidden = false; $('dashboard').hidden = true; $('logout').hidden = true;
       $('connection').textContent = 'Network mode · token required';
       $('error').textContent = usedToken ? 'Invalid access token' : '';
       token = ''; return;
     }
+    if (response.status === 304) return;
     if (!response.ok) throw new Error(`Companion returned ${response.status}`);
     const data = await response.json(); if (token !== usedToken) return;
     authRequired = data.mode !== 'local';
-    instances = data.instances; $('login').hidden = true; $('dashboard').hidden = false; $('logout').hidden = !authRequired;
+    revision = data.revision; instances = data.instances; $('login').hidden = true; $('dashboard').hidden = false; $('logout').hidden = !authRequired;
     $('connection').textContent = authRequired ? '● Connected · network mode' : '● Connected · local only'; $('error').textContent = ''; render();
     document.querySelectorAll('details').forEach(n => n.open = open.has(n.dataset.instance));
-  } catch (e) { $('connection').textContent = '○ Disconnected · retrying'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
+  } catch (e) { revision = null; $('connection').textContent = '○ Disconnected · retrying'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
   finally { pending = false; }
 }
 $('login').addEventListener('submit', e => { e.preventDefault(); token = $('token').value.trim(); $('token').value = ''; void poll(); });
-$('logout').onclick = () => { token = ''; instances = []; $('dashboard').hidden = true; $('login').hidden = false; $('logout').hidden = true; $('connection').textContent = 'Disconnected'; };
+$('logout').onclick = () => { token = ''; revision = null; instances = []; $('dashboard').hidden = true; $('login').hidden = false; $('logout').hidden = true; $('connection').textContent = 'Disconnected'; };
 for (const id of ['host', 'search', 'active', 'hide-finished', 'hide-waiting', 'hide-offline']) $(id).addEventListener('input', render);
 void poll();
 setInterval(poll, 2000);

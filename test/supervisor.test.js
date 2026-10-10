@@ -48,6 +48,39 @@ test('accepts legacy reports without a machine identity', async t => {
   const state = await (await request('/api/state')).json();
   assert.equal(state.instances[0].machineId, undefined);
 });
+test('state revision changes only for meaningful reports and derived transitions', async t => {
+  let time = 1000;
+  const { request } = await start(t, { now: () => time });
+  const send = value => request('/api/report', { method: 'POST', body: JSON.stringify(value) });
+  await send(report());
+  let response = await request('/api/state');
+  let state = await response.json();
+  assert.equal(state.revision, 1);
+  assert.equal(response.headers.get('etag'), '"1"');
+
+  time += 5000;
+  await send(report());
+  response = await request('/api/state', { headers: { 'if-none-match': '"1"' } });
+  assert.equal(response.status, 304);
+
+  const changed = report(); changed.sessions[0].status = 'waiting';
+  await send(changed);
+  response = await request('/api/state', { headers: { 'if-none-match': '"1"' } });
+  state = await response.json();
+  assert.equal(state.revision, 2);
+  assert.equal(state.instances[0].sessions[0].status, 'waiting');
+
+  time += 20000;
+  response = await request('/api/state', { headers: { 'if-none-match': '"2"' } });
+  state = await response.json();
+  assert.equal(state.revision, 3);
+  assert.equal(state.instances[0].online, false);
+
+  // A client without a validator (including one reconnecting after losing its cache) gets a full snapshot.
+  response = await request('/api/state');
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).instances.length, 1);
+});
 test('machine identity persists across plugin generations and distinguishes machines and concurrent processes', async t => {
   const originalFetch = globalThis.fetch;
   const old = Object.fromEntries(['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_HOST', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
