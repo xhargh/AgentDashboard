@@ -10,9 +10,13 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",
     "test": "node --test --test-isolation=none",
+    "test:e2e": "playwright test",
     "check": "node --check src/server.js && node --check src/plugin.js && node --check public/app.js",
     "install-plugin": "node scripts/install-plugin.js",
     "smoke": "node scripts/smoke.js",
     "diagnose": "node --env-file-if-exists=.env scripts/diagnose.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
   }
 }
