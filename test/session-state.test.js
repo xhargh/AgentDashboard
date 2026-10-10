@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FINISHED_SUBAGENT_GRACE_MS, isFinishedSubagentHidden, sessionState } from '../public/session-state.js';
+import { classifySessions, FINISHED_SUBAGENT_GRACE_MS, isActiveCategory, isFinishedSubagentHidden, sessionState } from '../public/session-state.js';
 
 test('an idle parent awaiting input is distinct from its three finished subagents', () => {
   const parent = { id: 'main', status: 'idle', activity: 'Ready' };
@@ -25,7 +25,7 @@ test('a recalled subagent resumes live activity and can finish again', () => {
   child.status = 'waiting';
   assert.equal(sessionState(child, true).label, 'Waiting for permission');
   child.status = 'error';
-  assert.equal(sessionState(child, true).label, 'error');
+  assert.equal(sessionState(child, true).label, 'Error · attention required');
   child.status = 'idle';
   assert.equal(sessionState(child, true).label, 'Idle');
 });
@@ -51,4 +51,57 @@ test('loss of connection overrides both idle interpretations', () => {
   for (const parentID of [undefined, 'main']) {
     assert.equal(sessionState({ parentID, status: 'idle' }, false).label, 'Offline');
   }
+});
+
+test('classification separates intervention, work, input, finished, and offline states', () => {
+  const sessions = [
+    { id: 'permission', status: 'waiting' },
+    { id: 'error', status: 'error' },
+    { id: 'busy', status: 'busy' },
+    { id: 'retry', status: 'retry' },
+    { id: 'parent', status: 'idle' },
+    { id: 'finished', status: 'idle', parentID: 'parent' },
+  ];
+  const classified = classifySessions(sessions, true);
+  assert.deepEqual(sessions.map(s => classified.get(s.id).category), [
+    'needs-attention', 'needs-attention', 'working', 'working', 'waiting-for-input', 'recently-finished',
+  ]);
+  assert.equal(isActiveCategory(classified.get('permission')), true);
+  assert.equal(isActiveCategory(classified.get('busy')), true);
+  assert.equal(isActiveCategory(classified.get('parent')), false);
+  assert.deepEqual(sessions.map(s => s.status), ['waiting', 'error', 'busy', 'retry', 'idle', 'idle']);
+});
+
+test('offline classification takes precedence over a stale permission wait', () => {
+  const session = { id: 'stale', status: 'waiting' };
+  const classification = classifySessions([session], false).get('stale');
+  assert.equal(classification.category, 'offline');
+  assert.equal(classification.attentionRequired, false);
+  assert.equal(isActiveCategory(classification), false);
+  assert.equal(sessionState(session, false, classification).label, 'Offline');
+  assert.equal(session.status, 'waiting');
+});
+
+test('unknown lifecycle states remain distinct and are not treated as active', () => {
+  const session = { id: 'unknown', status: 'future-opencode-state' };
+  const classification = classifySessions([session], true).get(session.id);
+  assert.equal(classification.category, 'unknown');
+  assert.equal(isActiveCategory(classification), false);
+  assert.equal(sessionState(session, true, classification).label, 'future-opencode-state');
+  assert.equal(session.status, 'future-opencode-state');
+});
+
+test('parent summaries inherit attention from children and nested descendants', () => {
+  const sessions = [
+    { id: 'root', status: 'idle' },
+    { id: 'child', status: 'busy', parentID: 'root' },
+    { id: 'grandchild', status: 'error', parentID: 'child' },
+  ];
+  const classified = classifySessions(sessions, true);
+  assert.equal(classified.get('child').childAttentionCount, 1);
+  assert.equal(classified.get('root').childAttentionCount, 1);
+  assert.equal(classified.get('root').attentionRequired, true);
+  assert.equal(isActiveCategory(classified.get('root')), true);
+  assert.equal(sessionState(sessions[2], true, classified.get('grandchild')).label, 'Error · attention required');
+  assert.deepEqual(sessions.map(s => s.status), ['idle', 'busy', 'error']);
 });
