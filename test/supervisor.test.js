@@ -248,8 +248,11 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   await emit('message.part.updated', { part: { sessionID: 'child', type: 'tool', tool: 'bash', state: { status: 'running', input: { command: 'secret-value' } } } });
   const running = await waitFor(i => i?.sessions.some(s => s.id === 'child' && s.activity === 'bash: running'));
   assert.equal(running.sessions.find(s => s.id === 'child').parentID, 'root'); assert.ok(!JSON.stringify(running).includes('secret-value'));
-  await emit('permission.asked', { sessionID: 'child' });
-  await waitFor(i => i?.sessions.find(s => s.id === 'child')?.status === 'waiting');
+  await emit('permission.asked', { sessionID: 'child', permission: 'secret permission', metadata: { prompt: 'secret prompt' } });
+  const waiting = await waitFor(i => i?.sessions.find(s => s.id === 'child')?.status === 'waiting');
+  assert.ok(waiting.events.some(event => event.sessionId === 'child' && event.kind === 'waiting'));
+  assert.ok(waiting.events.some(event => event.sessionId === 'root' && event.kind === 'created'));
+  assert.doesNotMatch(JSON.stringify(waiting.events), /secret permission|secret prompt|secret-value|command/);
   await emit('session.idle', { sessionID: 'child' });
   await waitFor(i => i?.sessions.find(s => s.id === 'child')?.status === 'idle');
   globalThis.fetch = async () => { throw new Error('Network offline'); };

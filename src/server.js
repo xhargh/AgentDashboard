@@ -24,9 +24,10 @@ function validReport(v) {
         s.todos.every(todo => todo && boundedString(todo.content) && boundedString(todo.status, 40)))) &&
     (v.git === undefined || v.git && typeof v.git === 'object' && !Array.isArray(v.git) &&
       Object.entries(v.git).every(([key, value]) => boundedString(key, 100) && (typeof value !== 'string' || boundedString(value)))) &&
-    (v.events === undefined || Array.isArray(v.events) && v.events.length <= LIMITS.eventsPerReport && v.events.every(e => e &&
-      boundedString(e.sessionId, 200) && boundedString(e.timestamp, 40) && Number.isFinite(Date.parse(e.timestamp)) &&
-      boundedString(e.kind, 40) && boundedString(e.summary, LIMITS.summary)));
+     (v.events === undefined || Array.isArray(v.events) && v.events.length <= LIMITS.eventsPerReport && v.events.every(e => e &&
+       boundedString(e.sessionId, 200) && boundedString(e.timestamp, 40) && Number.isFinite(Date.parse(e.timestamp)) &&
+       ['created','busy','idle','waiting','error','retry','permissionAnswered','deleted'].includes(e.kind) &&
+       boundedString(e.summary, 100)));
 }
 export function createServer({ token, now = Date.now } = {}) {
   if (token && token.length < 24) throw new Error('SUPERVISOR_TOKEN must contain at least 24 characters');
