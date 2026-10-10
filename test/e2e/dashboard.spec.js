@@ -93,7 +93,7 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(page.getByText('Fix API', { exact: true })).toHaveCount(0);
 
   await page.getByLabel('Search').fill('');
-  await page.getByLabel('Active only').check();
+  await page.locator('#active').check();
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
   await expect(page.getByText('Fix API', { exact: true })).toHaveCount(0);
 });
@@ -120,7 +120,7 @@ test('network mode requires a token, rejects a bad token, and connects with a va
 
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await expect(login).toBeVisible();
-  await expect(page.getByText('Build dashboard', { exact: true })).toHaveCount(0);
+  await expect(page.locator('#dashboard')).toBeHidden();
 });
 
 test('keeps expanded Git details open when polled state updates', async ({ page }) => {
