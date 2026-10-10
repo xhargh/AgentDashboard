@@ -3,7 +3,18 @@ const $ = id => document.getElementById(id);
 let token = '', instances = [], revision = null, pending = false, authRequired = false;
 const machineKey = i => i.machineId || `legacy:${i.host}`;
 const expandedAgents = new Set();
+const expandedActivity = new Set();
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
+const eventKinds = {
+  created: ['Session created', 'activity-created'], busy: ['Working', 'activity-work'], idle: ['Became idle', 'activity-complete'],
+  waiting: ['Permission requested', 'activity-permission'], error: ['Error', 'activity-error'], retry: ['Retrying', 'activity-work'],
+  permissionAnswered: ['Permission answered', 'activity-permission'], deleted: ['Session ended', 'activity-complete'],
+};
+function activityEvents(instance, sessionId) {
+  return (Array.isArray(instance.events) ? instance.events : [])
+    .filter(event => event?.sessionId === sessionId && eventKinds[event.kind] && Number.isFinite(Date.parse(event.timestamp)))
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)).slice(-5);
+}
 function render() {
   const online = instances.filter(i => i.online);
   const sessionClassifications = new Map(instances.map(i => [i.instanceId, classifySessions(i.sessions, i.online)]));
@@ -63,6 +74,24 @@ function render() {
       if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
       if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
       if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
+      const events = activityEvents(i, s.id), activityKey = `${i.instanceId}:${s.id}`;
+      const activity = el('details', undefined, 'activity-timeline');
+      activity.open = expandedActivity.has(activityKey);
+      activity.addEventListener('toggle', () => activity.open ? expandedActivity.add(activityKey) : expandedActivity.delete(activityKey));
+      const activitySummary = el('summary', `Recent activity · ${events.length}`, 'activity-summary');
+      activity.append(activitySummary);
+      if (!events.length) activity.append(el('p', 'No recent activity reported.', 'empty activity-empty'));
+      else {
+        const list = el('ol', undefined, 'activity-list');
+        for (const event of events) {
+          const [label, kindClass] = eventKinds[event.kind], item = el('li', undefined, `activity-event ${kindClass}`);
+          const date = new Date(event.timestamp), time = el('time', date.toLocaleString()); time.dateTime = date.toISOString();
+          item.append(el('span', label, 'activity-kind'), time);
+          list.append(item);
+        }
+        activity.append(list);
+      }
+      card.append(activity);
       const state = el('div', undefined, 'session-state'), badge = el('span', display.label, `badge ${display.className}`); badge.title = display.detail;
       state.append(badge, el('small', s.agent || (s.parentID ? 'subagent' : 'agent'))); row.append(info, state); card.append(row);
       if (i.git?.root && !s.parentID) {
