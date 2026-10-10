@@ -122,7 +122,9 @@ npm run smoke
 
 Tests cover token-free local reporting, automatic dashboard connection, local-only binding, remote/foreign-origin rejection, network login, HTTP authentication and validation, cross-origin rejection, multiple computers, disconnect expiry, plugin session events, parent/subagent relationships, actual Git status/log/worktree collection, and exclusion of raw tool arguments. They invoke the real HTTP request handler in memory so they run without permission to bind ports.
 
-`npm run smoke` is a separate real-network test: it starts an isolated OpenCode server with this plugin, creates parent/child sessions through the OpenCode API, and waits for them in the companion. It needs `opencode` on PATH, permission to open localhost ports, and any network access required by OpenCode itself. It makes no LLM calls. Temporary files and processes are cleaned up.
+`npm run smoke` is the separate, opt-in live-runtime smoke test; neither `npm test` nor `npm run check` needs OpenCode or live ports. It starts an isolated OpenCode server with this plugin, creates parent/child sessions through the OpenCode API, verifies their reported relationship, idle state, and lifecycle timestamps, then checks disconnection and recovery after restarting the OpenCode process. Restart checks that the machine identity is stable while the process/instance identity changes. Smoke config, data, cache, state, and home directories are temporary; the test uses no existing OpenCode config and cleans up its processes and files. It makes no LLM calls.
+
+The live smoke requires `opencode` on `PATH`, permission to bind localhost ports, and any network access OpenCode itself needs. Its no-LLM server/session operations verify creation and initial idle telemetry, but do not cause agent execution, so busy/idle resumption, permission waits/replies, retry/error events, and their reporting remain covered by deterministic plugin tests rather than this live smoke. Those execution-driven scenarios depend on an agent run and, for permissions and failures, suitable runtime/tool conditions; they are not silently treated as live-runtime coverage.
 
 Source layout:
 
