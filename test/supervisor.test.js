@@ -37,6 +37,60 @@ test('authenticated reporting, multiple hosts, stale and expired instances', asy
   time += 21000; state = await (await request('/api/state')).json(); assert.ok(state.instances.every(i => !i.online));
   time += 86400000; assert.equal((await (await request('/api/state')).json()).instances.length, 0);
 });
+test('accepts legacy reports without a machine identity', async t => {
+  const { request } = await start(t);
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(report()) })).status, 200);
+  const state = await (await request('/api/state')).json();
+  assert.equal(state.instances[0].machineId, undefined);
+});
+test('machine identity persists across plugin generations and distinguishes machines and concurrent processes', async t => {
+  const originalFetch = globalThis.fetch;
+  const old = Object.fromEntries(['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_HOST', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
+  const root = await mkdtemp(join(tmpdir(), 'supervisor-identity-'));
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(root, { recursive: true, force: true });
+  });
+  let time = Date.now();
+  const { request, dispatch } = await start(t, { now: () => time });
+  const plugins = [];
+  t.after(async () => {
+    for (const plugin of plugins) await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } });
+  });
+  globalThis.fetch = dispatch;
+  process.env.OPENCODE_SUPERVISOR_URL = 'http://localhost:4317';
+  process.env.OPENCODE_SUPERVISOR_TOKEN = token;
+  process.env.OPENCODE_SUPERVISOR_HOST = 'same-hostname';
+  const client = { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } };
+  const runAt = async config => {
+    process.env.XDG_CONFIG_HOME = config;
+    const plugin = await SupervisorPlugin({ directory: '/tmp', client });
+    plugins.push(plugin);
+    return plugin;
+  };
+  const [first, concurrent] = await Promise.all([runAt(join(root, 'machine-a')), runAt(join(root, 'machine-a'))]);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  let state = await (await request('/api/state')).json();
+  assert.equal(state.instances.length, 2);
+  assert.equal(new Set(state.instances.map(i => i.machineId)).size, 1);
+  assert.equal(new Set(state.instances.map(i => i.instanceId)).size, 2);
+  const oldGeneration = state.instances[0].instanceId;
+  await first.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } });
+  await concurrent.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } });
+  time += 21000;
+  await runAt(join(root, 'machine-a'));
+  await runAt(join(root, 'machine-b'));
+  await new Promise(resolve => setTimeout(resolve, 30));
+  state = await (await request('/api/state')).json();
+  const current = state.instances.filter(i => i.online);
+  assert.equal(current.length, 2);
+  assert.equal(new Set(current.map(i => i.machineId)).size, 2);
+  const restarted = current.find(i => i.machineId === state.instances.find(old => old.instanceId === oldGeneration).machineId);
+  assert.ok(restarted);
+  assert.notEqual(restarted.instanceId, oldGeneration);
+  assert.equal(new Set(current.map(i => i.host)).size, 1);
+});
 test('rejects unauthenticated, malformed, oversized and cross-origin requests', async t => {
   const { url, request, dispatch } = await start(t);
   assert.equal((await dispatch(url + '/api/state')).status, 401);

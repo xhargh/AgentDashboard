@@ -2,20 +2,23 @@ import { sessionState } from './session-state.js';
 const $ = id => document.getElementById(id);
 let token = '', instances = [], pending = false, authRequired = false;
 const active = s => ['busy', 'retry', 'waiting'].includes(s.status);
+const machineKey = i => i.machineId || `legacy:${i.host}`;
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 function render() {
   const online = instances.filter(i => i.online), sessions = online.flatMap(i => i.sessions);
   $('metrics').replaceChildren(...[
-    ['Computers online', new Set(online.map(i => i.host)).size], ['OpenCode instances', online.length],
+    ['Computers online', new Set(online.map(machineKey)).size], ['OpenCode instances', online.length],
     ['Active agents', sessions.filter(s => !s.parentID && active(s)).length], ['Active subagents', sessions.filter(s => s.parentID && active(s)).length],
   ].map(([label, value]) => { const n = el('article', undefined, 'metric'); n.append(el('span', label), el('strong', value)); return n; }));
   const selected = $('host').value;
-  $('host').replaceChildren(new Option('All computers', ''), ...[...new Set(instances.map(i => i.host))].sort().map(h => new Option(h, h)));
+  const machines = new Map(instances.map(i => [machineKey(i), i]));
+  $('host').replaceChildren(new Option('All computers', ''), ...[...machines].sort((a, b) => a[1].host.localeCompare(b[1].host)).map(([key, i]) =>
+    new Option(instances.filter(other => other.host === i.host).length > 1 ? `${i.host} (${key.slice(0, 8)})` : i.host, key)));
   $('host').value = selected;
   const query = $('search').value.toLowerCase();
   const fleet = $('fleet'); fleet.replaceChildren();
   let hiddenOffline = 0;
-  for (const i of instances.filter(i => !selected || i.host === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
+  for (const i of instances.filter(i => !selected || machineKey(i) === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
     if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
     const hiddenFinished = $('hide-finished').checked ? i.sessions.filter(s => s.parentID && s.status === 'idle').length : 0;
     const visible = i.sessions.filter(s => (!$('hide-finished').checked || !s.parentID || s.status !== 'idle') &&
