@@ -70,7 +70,13 @@ Replace `192.168.1.10` with the companion machine's address. Open that address i
 
 In network mode, all API requests require the shared bearer token, including dashboard reads. The browser keeps it only in memory. Plain HTTP exposes the token and telemetry to network observers: use it on a trusted LAN, or place the companion behind an HTTPS reverse proxy / encrypted private network. TLS terminates at your proxy; point plugins and the browser to its HTTPS URL. Do not publish the plain HTTP service to the internet. Token rotation requires updating the companion and restarting configured OpenCode instances.
 
-Telemetry includes paths, session/task titles, tool titles, Git filenames and commit subjects. It excludes prompts, assistant text, reasoning, raw tool arguments, and tool output. Tool/session titles can still contain sensitive information. Git is inspected on the monitored machine with bounded, read-only subprocesses, never through remotely supplied shell commands.
+By default, telemetry includes paths, session/task titles, tool activity, and Git status, filenames, worktrees, and commit subjects. It excludes prompts, assistant text, reasoning, raw tool arguments, and tool output. Tool/session titles can still contain sensitive information. Git is inspected on the monitored machine with bounded, read-only subprocesses, never through remotely supplied shell commands. Configure plugin privacy with `OPENCODE_SUPERVISOR_TELEMETRY`, a JSON object set in the OpenCode process environment. For example:
+
+```bash
+export OPENCODE_SUPERVISOR_TELEMETRY='{"titles":false,"tasks":false,"toolActivity":false,"paths":false,"git":false}'
+```
+
+The available categories are `titles`, `tasks`, `toolActivity`, `paths`, and `git`; each defaults to `true`. Setting a category to `false` omits its data in the plugin before transmission. Git snapshots include paths (repository roots, filenames, and worktree locations), so setting `paths` to `false` also disables `git`. The status-only profile is `{"profile":"status-only"}` and disables all five categories while retaining host/machine/instance identity, process ID, session IDs, parent relationships, and session statuses. Configuration must be valid JSON with known boolean categories; invalid settings disable reporting and produce a local diagnostic. Older reports remain accepted, including reports without optional session metadata or Git snapshots.
 
 ## Run as a Linux user service
 
@@ -105,6 +111,7 @@ For token-free local access, leave `SUPERVISOR_TOKEN` empty or omit it from the 
 | OpenCode | `OPENCODE_SUPERVISOR_TOKEN` | Absent: local reports only. Required for a network companion |
 | OpenCode | `OPENCODE_SUPERVISOR_URL` | `http://127.0.0.1:4317` |
 | OpenCode | `OPENCODE_SUPERVISOR_HOST` | OS hostname |
+| OpenCode | `OPENCODE_SUPERVISOR_TELEMETRY` | All metadata categories enabled; accepts category booleans or `{"profile":"status-only"}` |
 
 The plugin creates a stable machine ID in `$XDG_CONFIG_HOME/opencode-supervisor/machine-id` (or `~/.config/opencode-supervisor/machine-id` when `XDG_CONFIG_HOME` is unset). Each plugin process generation also gets a fresh instance ID. Display hostnames remain configurable and are not used as machine identity. Failed reports retry with exponential jitter from 0.5–60 seconds, without overlapping requests; successful reports reset the delay. Failure diagnostics are secret-free and limited to one per 30 seconds. Authentication/report-configuration errors are labeled separately from server, network, and timeout failures.
 
