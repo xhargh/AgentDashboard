@@ -30,6 +30,17 @@ function report(title = 'Build dashboard', status = 'busy') {
             parentID: 'root-alpha',
             title: 'Finished review',
             status: 'idle',
+            stateChangedAt: new Date(now - 60_000).toISOString(),
+            directory: '/work/alpha/app',
+            activity: 'Review complete',
+            agent: 'review',
+            todos: [],
+          },
+          {
+            id: 'child-unknown-time',
+            parentID: 'root-alpha',
+            title: 'Unknown-age review',
+            status: 'idle',
             directory: '/work/alpha/app',
             activity: 'Review complete',
             agent: 'review',
@@ -75,12 +86,14 @@ async function installStateFixture(page, handler) {
 }
 
 test('local mode connects automatically and filters fleet activity', async ({ page }) => {
+  await page.clock.install({ time: new Date(120_000) });
   await installStateFixture(page, () => report());
   await page.goto('/');
 
   await expect(page.getByText('● Connected · local only')).toBeVisible();
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
   await expect(page.getByText('Finished review')).toHaveCount(0);
+  await expect(page.getByText('Unknown-age review', { exact: true })).toBeVisible();
 
   await page.getByText('Filter agents').click();
   await page.getByLabel('Computer').selectOption('beta');
