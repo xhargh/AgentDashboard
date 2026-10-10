@@ -154,3 +154,15 @@ test('renders status-only instances with optional metadata omitted', async ({ pa
   await expect(page.getByText('Session', { exact: true })).toBeVisible();
   await expect(page.getByText('busy', { exact: true })).toBeVisible();
 });
+
+test('distinguishes replaced instances from instances that are merely offline', async ({ page }) => {
+  const now = Date.now();
+  await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [
+    { instanceId: 'replaced', host: 'alpha', pid: 42, online: false, replaced: true, lastSeen: now, sessions: [] },
+    { instanceId: 'offline', host: 'beta', pid: 43, online: false, lastSeen: now, sessions: [] },
+  ] }));
+  await page.goto('/');
+
+  await expect(page.getByText('↻ Replaced · PID 42 · 0s ago')).toBeVisible();
+  await expect(page.getByText('○ Offline · PID 43 · 0s ago')).toBeVisible();
+});

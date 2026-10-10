@@ -95,6 +95,30 @@ test('reconciles same-process generations without merging concurrent instances',
   instances = (await (await request('/api/state')).json()).instances;
   assert.equal(instances.length, 0, 'replaced generations retain the existing 24-hour expiry');
 });
+test('offline instances recover under the same generation and remain distinct from replaced ones', async t => {
+  let time = 1000;
+  const { request } = await start(t, { now: () => time });
+  const send = (instanceId, generationStartedAt) => request('/api/report', { method: 'POST', body: JSON.stringify({
+    instanceId, machineId: 'machine-a', host: 'alpha', pid: 41, generationStartedAt,
+    sessions: [{ id: 'session', status: 'busy' }],
+  }) });
+
+  await send('generation-one', 900);
+  time += 20000;
+  let instances = (await (await request('/api/state')).json()).instances;
+  assert.equal(instances[0].online, false);
+  assert.equal(instances[0].replaced, undefined);
+
+  await send('generation-one', 900);
+  instances = (await (await request('/api/state')).json()).instances;
+  assert.equal(instances.find(instance => instance.instanceId === 'generation-one').online, true);
+
+  await send('generation-two', 21000);
+  instances = (await (await request('/api/state')).json()).instances;
+  assert.equal(instances.find(instance => instance.instanceId === 'generation-one').online, false);
+  assert.equal(instances.find(instance => instance.instanceId === 'generation-one').replaced, true);
+  assert.equal(instances.find(instance => instance.instanceId === 'generation-two').online, true);
+});
 test('state revision changes only for meaningful reports and derived transitions', async t => {
   let time = 1000;
   const { request } = await start(t, { now: () => time });
