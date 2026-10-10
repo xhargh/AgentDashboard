@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenCode Supervisor dashboard
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/OpenCodeSupervisor
+ExecStart=/usr/bin/node %h/OpenCodeSupervisor/src/server.js
+EnvironmentFile=%h/.config/opencode-supervisor/environment
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

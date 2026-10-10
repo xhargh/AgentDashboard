@@ -1,0 +1,18 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OpenCode Supervisor</title><link rel="stylesheet" href="/style.css"></head><body>
+<header><div><span class="brand">◈</span><strong>OpenCode <span>Supervisor</span></strong></div><span id="connection" role="status">Disconnected</span></header>
+<main><section class="intro"><div><p class="eyebrow">YOUR AGENT CONTROL ROOM</p><h1>Every agent. One place.</h1><p class="muted">Live activity across your projects and machines.</p></div><button id="logout" hidden>Disconnect</button></section>
+<form id="login" hidden><label for="token">Companion access token</label><div class="row"><input id="token" type="password" required autocomplete="off" placeholder="Paste your SUPERVISOR_TOKEN"><button>Connect</button></div><p class="muted">The token stays in memory for this tab. Reports refresh every two seconds.</p><p id="error" role="alert"></p></form>
+<div id="dashboard" hidden><section id="metrics" class="metrics" aria-label="Agent totals"></section><h2 class="fleet-heading">Fleet overview</h2>
+<section class="filters" aria-labelledby="filters-heading">
+  <h3 id="filters-heading">Filter agents</h3>
+  <div class="filter-fields">
+    <label for="host">Computer<select id="host"><option value="">All computers</option></select></label>
+    <label for="search">Search<input id="search" type="search" placeholder="Search folder, task, agent…"></label>
+  </div>
+  <div class="filter-options">
+    <label class="filter-option" for="active"><input type="checkbox" id="active" aria-describedby="active-help"><span><strong>Active only</strong><small id="active-help">Show agents working, retrying, or waiting for permission.</small></span></label>
+    <label class="filter-option" for="hide-finished"><input type="checkbox" id="hide-finished" checked aria-describedby="finished-help"><span><strong>Hide finished subagents</strong><small id="finished-help">Hide idle subagents until they resume. Main agents stay visible unless Active only is enabled.</small></span></label>
+  </div>
+</section>
+<div id="fleet"></div></div>
+</main><footer>OpenCode Supervisor · Read-only monitoring · Offline after 20 seconds without a heartbeat</footer><script type="module" src="/app.js"></script></body></html>
