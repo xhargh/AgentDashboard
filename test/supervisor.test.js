@@ -281,6 +281,72 @@ test('status-only telemetry strips metadata before transmission and validates se
     return SupervisorPlugin({ directory: '/tmp' });
   })(), {});
 });
+test('each telemetry privacy category is filtered from the outgoing report payload', async t => {
+  const originalFetch = globalThis.fetch;
+  const keys = ['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_TELEMETRY', 'XDG_CONFIG_HOME'];
+  const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const root = await mkdtemp(join(tmpdir(), 'supervisor-privacy-categories-'));
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(root, { recursive: true, force: true });
+  });
+  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
+  process.env.OPENCODE_SUPERVISOR_TOKEN = token;
+  process.env.XDG_CONFIG_HOME = root;
+  const git = (...args) => promisify(execFile)('git', ['-C', root, ...args]);
+  await git('init');
+  await git('config', 'user.name', 'Privacy test');
+  await git('config', 'user.email', 'privacy@example.test');
+  await writeFile(join(root, 'private-file'), 'fixture');
+  await git('add', '.');
+  await git('commit', '-m', 'PRIVATE_COMMIT');
+
+  for (const [category, forbidden] of [
+    ['titles', 'PRIVATE_TITLE'], ['tasks', 'PRIVATE_TASK'], ['toolActivity', 'PRIVATE_ACTIVITY'],
+    ['paths', root], ['git', 'PRIVATE_COMMIT'],
+  ]) {
+    process.env.OPENCODE_SUPERVISOR_TELEMETRY = JSON.stringify({ [category]: false });
+    const reports = [];
+    globalThis.fetch = async (_url, init) => { reports.push(JSON.parse(init.body)); return new Response('', { status: 200 }); };
+    const directory = root;
+    const plugin = await SupervisorPlugin({ directory, worktree: '/private/worktree', client: {
+      session: {
+        list: async () => ({ data: [{ id: 'session', title: 'PRIVATE_TITLE', directory, parentID: 'parent' }] }),
+        status: async () => ({ data: { session: { type: 'busy' } } }),
+      },
+    } });
+    t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory } } }));
+    await plugin.event({ event: { type: 'session.updated', properties: { info: {
+      id: 'session', title: 'PRIVATE_TITLE', directory,
+      todos: [{ content: 'PRIVATE_TASK', status: 'pending' }],
+    } } } });
+    await plugin.event({ event: { type: 'message.part.updated', properties: {
+      part: { sessionID: 'session', type: 'tool', tool: 'PRIVATE_ACTIVITY', state: { status: 'running', input: { command: 'RAW_TOOL_ARGUMENT' }, output: 'RAW_TOOL_OUTPUT' } },
+    } } });
+    await plugin.event({ event: { type: 'todo.updated', properties: { sessionID: 'session', todos: [{ content: 'PRIVATE_TASK', status: 'pending' }] } } });
+    await plugin.event({ event: { type: 'message.updated', properties: { info: { sessionID: 'session', content: 'RAW_PROMPT and PRIVATE_REASONING' } } } });
+    await new Promise(resolve => setTimeout(resolve, 350));
+    const sent = reports.at(-1);
+    assert.ok(sent, `${category}: report was transmitted`);
+    const payload = JSON.stringify(sent);
+    assert.ok(!payload.includes(forbidden), `${category}: ${forbidden} absent from transmitted report`);
+    assert.ok(!payload.includes('RAW_TOOL_ARGUMENT'));
+    assert.ok(!payload.includes('RAW_TOOL_OUTPUT'));
+    assert.ok(!payload.includes('RAW_PROMPT'));
+    assert.ok(!payload.includes('PRIVATE_REASONING'));
+    assert.equal(sent.sessions[0].id, 'session');
+    assert.equal(sent.sessions[0].status, 'busy');
+    if (category === 'paths') {
+      assert.equal(sent.directory, undefined);
+      assert.equal(sent.worktree, undefined);
+      assert.equal(sent.git, undefined);
+      assert.equal(sent.sessions[0].directory, undefined);
+    }
+    if (category === 'git') assert.equal(sent.git, undefined);
+    await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory } } });
+  }
+});
 test('plugin classifies HTTP, network, and timeout report failures without leaking details', async t => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
