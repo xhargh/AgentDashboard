@@ -2,8 +2,7 @@ import { expect, test } from '@playwright/test';
 
 const token = 'e2e-network-token-with-at-least-24-characters';
 
-function report(title = 'Build dashboard', status = 'busy') {
-  const now = Date.now();
+function report(title = 'Build dashboard', status = 'busy', now = Date.now()) {
   return {
     mode: 'local',
     serverTime: now,
@@ -29,6 +28,17 @@ function report(title = 'Build dashboard', status = 'busy') {
             id: 'child-alpha',
             parentID: 'root-alpha',
             title: 'Finished review',
+            status: 'idle',
+            stateChangedAt: new Date(now - 30_000).toISOString(),
+            directory: '/work/alpha/app',
+            activity: 'Review complete',
+            agent: 'review',
+            todos: [],
+          },
+          {
+            id: 'child-unknown-time',
+            parentID: 'root-alpha',
+            title: 'Unknown-age review',
             status: 'idle',
             directory: '/work/alpha/app',
             activity: 'Review complete',
@@ -75,12 +85,14 @@ async function installStateFixture(page, handler) {
 }
 
 test('local mode connects automatically and filters fleet activity', async ({ page }) => {
-  await installStateFixture(page, () => report());
+  await page.clock.install({ time: new Date(120_000) });
+  await installStateFixture(page, () => report('Build dashboard', 'busy', 120_000));
   await page.goto('/');
 
   await expect(page.getByText('● Connected · local only')).toBeVisible();
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
-  await expect(page.getByText('Finished review')).toHaveCount(0);
+  await expect(page.getByText('Finished review')).toBeVisible();
+  await expect(page.getByText('Unknown-age review')).toBeVisible();
 
   await page.getByText('Filter agents').click();
   await page.getByLabel('Computer').selectOption('beta');
@@ -149,8 +161,22 @@ test('renders status-only instances with optional metadata omitted', async ({ pa
   }] }));
   await page.goto('/');
 
-  await expect(page.getByText('private-host', { exact: true })).toBeVisible();
+  await expect(page.locator('#fleet article.instance').getByText('private-host', { exact: true })).toBeVisible();
   await expect(page.getByText('Monitored instance', { exact: true })).toBeVisible();
   await expect(page.getByText('Session', { exact: true })).toBeVisible();
-  await expect(page.getByText('busy', { exact: true })).toBeVisible();
+  await expect(page.locator('#fleet .badge').getByText('busy', { exact: true })).toBeVisible();
+});
+
+test('distinguishes replaced instances from instances that are merely offline', async ({ page }) => {
+  const now = Date.now();
+  await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [
+    { instanceId: 'replaced', host: 'alpha', pid: 42, online: false, replaced: true, lastSeen: now, sessions: [] },
+    { instanceId: 'offline', host: 'beta', pid: 43, online: false, lastSeen: now, sessions: [] },
+  ] }));
+  await page.goto('/');
+  await page.getByText('Filter agents', { exact: true }).click();
+  await page.locator('#hide-offline').uncheck();
+
+  await expect(page.locator('#fleet').getByText(/↻ Replaced · PID 42 · \d+s ago/)).toBeVisible();
+  await expect(page.locator('#fleet').getByText(/○ Offline · PID 43 · \d+s ago/)).toBeVisible();
 });

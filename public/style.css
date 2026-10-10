@@ -17,3 +17,4 @@
 .filter-option strong{display:block;font-size:14px;font-weight:600}
 .filter-option small{display:block;font-size:12px;margin-top:4px;line-height:1.5}
 @media(max-width:640px){.filter-fields,.filter-options{grid-template-columns:1fr}.filters{padding:16px}}
+.attention-summary{color:#ffba9c;font-weight:600}

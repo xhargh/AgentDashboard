@@ -25,8 +25,8 @@ function telemetryConfig(value = process.env.OPENCODE_SUPERVISOR_TELEMETRY) {
   if (!categories.paths) categories.git = false;
   return categories;
 }
-function privateReport({ instanceId, machineId, host, pid, directory, worktree, sessions, git }, privacy) {
-  const report = { instanceId, machineId, host, pid, sessions: sessions.map(session => {
+function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git }, privacy) {
+  const report = { instanceId, machineId, generationStartedAt, host, pid, sessions: sessions.map(session => {
     const result = { id: session.id, status: session.status };
     if (session.parentID) result.parentID = session.parentID;
     if (privacy.titles && session.title) result.title = session.title;
@@ -119,6 +119,7 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
     if (endpoint.hostname === 'localhost') endpoint.hostname = '127.0.0.1';
   }
   const instanceId = randomUUID();
+  const generationStartedAt = Date.now();
   const machine = await machineId();
   const sessions = new Map();
   let gitInfo = {}, lastGit = 0, sending = false, stopped = false, dirty = false, eventTimer;
@@ -146,7 +147,7 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
       if (privacy.git && Date.now() - lastGit > 10000) { gitInfo = await inspectGit(directory); lastGit = Date.now(); }
       const response = await fetch(new URL('/api/report', endpoint), {
         method: 'POST', redirect: 'error', headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'content-type': 'application/json' },
-        body: JSON.stringify(privateReport({ instanceId, machineId: machine, host: process.env.OPENCODE_SUPERVISOR_HOST || hostname(), pid: process.pid,
+        body: JSON.stringify(privateReport({ instanceId, machineId: machine, generationStartedAt, host: process.env.OPENCODE_SUPERVISOR_HOST || hostname(), pid: process.pid,
           directory, worktree, sessions: [...sessions.values()], git: gitInfo }, privacy)), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {
