@@ -114,6 +114,19 @@ Session state is held in memory. Companion restarts recover from the next plugin
 
 ## Verification and development
 
+### Run all CI checks in Docker
+
+Install Docker Engine or Docker Desktop with BuildKit support; the host does not need Node.js, npm, Chromium, or Playwright dependencies. From the repository root, run:
+
+```bash
+docker build -t opencode-supervisor-ci .
+docker run --rm -v "$PWD:/workspace" -w /workspace -e CI=1 opencode-supervisor-ci
+```
+
+The image is based on the official Playwright `v1.56.1-noble` image, which pins Chromium and its Linux runtime dependencies to the Playwright version in `package.json`; the image includes Node 22.16 or newer. The container runs `npm ci`, `npm test`, `npm run check`, and `npm run test:e2e` in that order. The workflow in `.github/workflows/e2e.yml` builds and runs the same image for browser E2E.
+
+The current directory is mounted at `/workspace`, so the lockfile and source are read directly from the checkout. `npm ci` installs dependencies in the container; `node_modules` is ignored by the Docker build and is not needed on the host. Docker needs network access during image build and `npm ci` to download the base image and npm packages. Playwright starts its test server on `127.0.0.1:4317` inside the container. The tests reach it internally, so no host port needs to be published; if you do publish the port for debugging, bind it to `127.0.0.1` rather than exposing it to the LAN. No external test server or service is required.
+
 ```bash
 npm run check
 npm test
