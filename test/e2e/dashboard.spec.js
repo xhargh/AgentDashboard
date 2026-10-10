@@ -247,8 +247,9 @@ test('shows sanitized chronological per-agent activity and preserves expansion a
     return state;
   });
   await page.goto('/');
-  const card = page.locator('.session-card').filter({ hasText: 'Build dashboard' }).first();
-  const timeline = card.locator('details.activity-timeline');
+  const root = page.locator('details.agent-tree[data-agent-key="instance-alpha:root-alpha"]');
+  await root.locator(':scope > summary.agent-tree-summary').click();
+  const timeline = root.locator(':scope > article.session-card details.activity-timeline');
   await expect(timeline).toContainText('Recent activity · 3');
   await timeline.locator('summary').click();
   await expect(timeline.locator('.activity-kind')).toHaveText(['Working', 'Permission requested', 'Error']);
@@ -264,8 +265,10 @@ test('shows sanitized chronological per-agent activity and preserves expansion a
 test('shows a compact empty activity state for agents without event history', async ({ page }) => {
   await installStateFixture(page, () => report());
   await page.goto('/');
-  const card = page.locator('.session-card').filter({ hasText: 'Fix API' }).first();
-  const timeline = card.locator('details.activity-timeline');
+  const root = page.locator('details.agent-tree[data-agent-key="instance-alpha:root-alpha"]');
+  await root.locator(':scope > summary.agent-tree-summary').click();
+  const child = root.locator('[data-agent-key="instance-alpha:child-alpha"]');
+  const timeline = child.locator(':scope > article.session-card details.activity-timeline');
   await timeline.locator('summary').click();
   await expect(timeline).toContainText('No recent activity reported.');
 });
