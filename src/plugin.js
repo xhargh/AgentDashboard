@@ -64,6 +64,14 @@ function reportWarning(category) {
   console.warn(`[OpenCode Supervisor] Telemetry report failed: ${category}`);
 }
 
+const RETRY_BASE_MS = 1000;
+const RETRY_MAX_MS = 60000;
+const DIAGNOSTIC_INTERVAL_MS = 30000;
+export function retryDelay(failures, random = Math.random) {
+  const ceiling = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.min(failures - 1, 16));
+  return Math.round(ceiling * (0.5 + random() * 0.5));
+}
+
 export const SupervisorPlugin = async ({ directory, worktree, client }) => {
   let endpoint;
   try { endpoint = new URL(process.env.OPENCODE_SUPERVISOR_URL || 'http://127.0.0.1:4317'); } catch { return {}; }
@@ -78,6 +86,7 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
   const machine = await machineId();
   const sessions = new Map();
   let gitInfo = {}, lastGit = 0, sending = false, stopped = false, dirty = false, eventTimer;
+  let retryTimer, failures = 0, nextAttempt = 0, lastDiagnostic = 0;
   const session = id => {
     if (!sessions.has(id)) sessions.set(id, createSession(id, { title: 'Untitled session', directory, status: 'idle', activity: 'Ready' }));
     return sessions.get(id);
@@ -94,7 +103,9 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
   async function send() {
     if (stopped) return;
     if (sending) { dirty = true; return; }
+    if (Date.now() < nextAttempt) return;
     sending = true;
+    let succeeded = false;
     try {
       if (Date.now() - lastGit > 10000) { gitInfo = await inspectGit(directory); lastGit = Date.now(); }
       const response = await fetch(new URL('/api/report', endpoint), {
@@ -103,20 +114,40 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
           directory, worktree, sessions: [...sessions.values()], git: gitInfo }), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {
-        reportWarning(reportFailure(response));
+        noteFailure(reportFailure(response));
         await response.body?.cancel();
         return;
       }
       await response.body?.cancel();
+      succeeded = true;
     } catch (error) {
-      try { reportWarning(transportFailure(error)); } catch { /* Diagnostics must not affect agent execution. */ }
+      noteFailure(transportFailure(error));
       // Monitoring outages do not interrupt agent execution. Next heartbeat retries.
     }
-    finally { sending = false; if (dirty && !stopped) { dirty = false; void send(); } }
+    finally {
+      sending = false;
+      if (succeeded) { failures = 0; nextAttempt = 0; clearTimeout(retryTimer); retryTimer = undefined; }
+      else {
+        failures++;
+        const delay = retryDelay(failures);
+        nextAttempt = Date.now() + delay;
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(() => { retryTimer = undefined; void send(); }, delay);
+        retryTimer.unref?.();
+      }
+      if (dirty && !stopped) { dirty = false; if (succeeded) scheduleReport(); }
+    }
+  }
+  function noteFailure(category) {
+    const now = Date.now();
+    if (now - lastDiagnostic < DIAGNOSTIC_INTERVAL_MS) return;
+    lastDiagnostic = now;
+    try { reportWarning(category); } catch { /* Diagnostics must not affect agent execution. */ }
   }
   function scheduleReport() {
     if (eventTimer || stopped) return;
-    eventTimer = setTimeout(() => { eventTimer = undefined; void send(); }, 250);
+    const delay = Math.max(250, nextAttempt - Date.now());
+    eventTimer = setTimeout(() => { eventTimer = undefined; void send(); }, delay);
     eventTimer.unref?.();
   }
   // Seed existing sessions, including restored sessions and children.
@@ -133,7 +164,7 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
   return {
     event: async ({ event }) => {
       const p = event.properties || {};
-      if (event.type === 'server.instance.disposed' && p.directory === directory) { stopped = true; clearInterval(timer); clearTimeout(eventTimer); return; }
+      if (event.type === 'server.instance.disposed' && p.directory === directory) { stopped = true; clearInterval(timer); clearTimeout(eventTimer); clearTimeout(retryTimer); return; }
       if (event.type === 'session.created' || event.type === 'session.updated') info(p.info);
       if (event.type === 'session.deleted') sessions.delete(p.info?.id);
       if (p.sessionID) {
