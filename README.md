@@ -106,7 +106,7 @@ For token-free local access, leave `SUPERVISOR_TOKEN` empty or omit it from the 
 | OpenCode | `OPENCODE_SUPERVISOR_URL` | `http://127.0.0.1:4317` |
 | OpenCode | `OPENCODE_SUPERVISOR_HOST` | OS hostname |
 
-The plugin creates a stable machine ID in `$XDG_CONFIG_HOME/opencode-supervisor/machine-id` (or `~/.config/opencode-supervisor/machine-id` when `XDG_CONFIG_HOME` is unset). Each plugin process generation also gets a fresh instance ID. Display hostnames remain configurable and are not used as machine identity.
+The plugin creates a stable machine ID in `$XDG_CONFIG_HOME/opencode-supervisor/machine-id` (or `~/.config/opencode-supervisor/machine-id` when `XDG_CONFIG_HOME` is unset). Each plugin process generation also gets a fresh instance ID. Display hostnames remain configurable and are not used as machine identity. Failed reports retry with exponential jitter from 0.5–60 seconds, without overlapping requests; successful reports reset the delay. Failure diagnostics are secret-free and limited to one per 30 seconds. Authentication/report-configuration errors are labeled separately from server, network, and timeout failures.
 
 Session state is held in memory. Companion restarts recover from the next plugin heartbeat. Plugin restarts get new instance IDs while retaining the machine ID; old entries remain visibly offline until expiration. Older plugin reports without machine IDs remain accepted and are grouped by hostname. Idle sessions are retained up to a soft 500-session limit per plugin; active sessions are preferred. The companion accepts up to 1,000 sessions/report, 1 MiB/report and 2,000 retained instances.
 

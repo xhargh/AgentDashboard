@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Readable } from 'node:stream';
 import { createServer } from '../src/server.js';
-import { SupervisorPlugin } from '../src/plugin.js';
+import { retryDelay, SupervisorPlugin } from '../src/plugin.js';
 const token = 'test-token-with-at-least-24-characters';
 async function start(t, options = {}) {
   const server = createServer({ token, ...options });
@@ -29,6 +29,11 @@ async function start(t, options = {}) {
   return { url, dispatch, request: (path, init = {}) => dispatch(path, { ...init, headers: { authorization: `Bearer ${token}`, ...init.headers } }) };
 }
 const report = (id = 'one', host = 'alpha') => ({ instanceId: id, host, directory: '/work/project', sessions: [{ id: 'parent', title: 'Build', directory: '/work/project', status: 'busy' }], git: {} });
+test('retry delay grows exponentially, is jittered, and remains bounded', () => {
+  assert.equal(retryDelay(1, () => 0), 500);
+  assert.equal(retryDelay(2, () => 1), 2000);
+  assert.equal(retryDelay(100, () => 1), 60000);
+});
 test('requires a strong shared token', () => assert.throws(() => createServer({ token: 'short' })));
 test('authenticated reporting, multiple hosts, stale and expired instances', async t => {
   let time = 1000; const { request } = await start(t, { now: () => time });
@@ -180,6 +185,36 @@ test('plugin classifies HTTP, network, and timeout report failures without leaki
     assert.doesNotMatch(warnings[0], /secret-token|private/);
     await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } });
   }
+});
+test('plugin backs off repeated failures, rate-limits diagnostics, and recovers on retry', async t => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const old = Object.fromEntries(['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
+  const root = await mkdtemp(join(tmpdir(), 'supervisor-retry-'));
+  t.after(async () => {
+    globalThis.fetch = originalFetch; console.warn = originalWarn;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(root, { recursive: true, force: true });
+  });
+  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
+  process.env.OPENCODE_SUPERVISOR_TOKEN = 'test-token';
+  process.env.XDG_CONFIG_HOME = root;
+  let requests = 0, recovered = false;
+  const warnings = [];
+  console.warn = message => warnings.push(message);
+  globalThis.fetch = async () => {
+    requests++;
+    return recovered ? new Response('', { status: 200 }) : new Response('', { status: 503 });
+  };
+  const plugin = await SupervisorPlugin({ directory: '/tmp' });
+  t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
+  for (let n = 0; n < 100 && requests < 2; n++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(requests >= 2 && requests <= 5, `unexpected retry count ${requests}`);
+  assert.equal(warnings.length, 1);
+  recovered = true;
+  for (let n = 0; n < 100 && requests < 3; n++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(requests >= 3, 'retry should recover after the endpoint becomes available');
+  assert.equal(warnings.length, 1);
 });
 test('local mode allows token-free reports and rejects remote peers, rebinding and foreign origins', async t => {
   const { dispatch } = await start(t, { token: undefined });
