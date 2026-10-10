@@ -156,6 +156,20 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
   await expect(details.getByRole('heading', { name: 'Recent commits' })).toBeVisible();
 });
 
+test('renders status-only instances without optional metadata', async ({ page }) => {
+  const now = Date.now();
+  await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [{
+    instanceId: 'status-only', machineId: 'machine', host: 'private-host', pid: 42, online: true, lastSeen: now,
+    sessions: [{ id: 'session', status: 'busy' }],
+  }] }));
+  await page.goto('/');
+
+  await expect(page.getByText('private-host', { exact: true })).toBeVisible();
+  await expect(page.getByText('Session', { exact: true })).toBeVisible();
+  await expect(page.getByText('busy', { exact: true })).toBeVisible();
+  await expect(page.getByText('undefined', { exact: true })).toHaveCount(0);
+});
+
 test('updates keyed session nodes across rapid state changes and removes deleted sessions', async ({ page }) => {
   let polls = 0;
   await installStateFixture(page, () => {

@@ -60,7 +60,8 @@ function render() {
   const selected = $('host').value;
   const machines = new Map(instances.map(i => [machineKey(i), i]));
   const options = [...machines].sort((a, b) => a[1].host.localeCompare(b[1].host)).map(([key, i]) =>
-    new Option(instances.filter(other => other.host === i.host).length > 1 ? `${i.host} (${key.slice(0, 8)})` : i.host, key));
+    new Option(instances.filter(other => other.host === i.host).length > 1 ? `${i.host} (${key.slice(0, 8)})` : i.host,
+      instances.filter(other => other.host === i.host).length > 1 ? key : i.host));
   if (!$('host').options || $('host').options.length !== options.length + 1 || options.some((option, index) => $('host').options[index + 1]?.value !== option.value)) {
     $('host').replaceChildren(new Option('All computers', ''), ...options);
   }
@@ -74,7 +75,7 @@ function render() {
     ['recently-finished', 'Recently finished', 'Completed subagents available if recalled', []],
     ['offline', 'Offline', 'Instances no longer reporting', []],
   ];
-  for (const i of instances.filter(i => !selected || machineKey(i) === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
+  for (const i of instances.filter(i => !selected || machineKey(i) === selected || i.host === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
     const eligible = new Set();
     for (const s of i.sessions) {
       const classification = classificationsFor(i).get(s.id);
@@ -97,13 +98,13 @@ function render() {
         container.open = expandedAgents.has(key);
         container.addEventListener('toggle', () => container.open ? expandedAgents.add(key) : expandedAgents.delete(key));
         const summary = el('summary', undefined, 'agent-tree-summary');
-        summary.append(el('span', `${s.title} · ${display.label}`, 'tree-title'), el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
+        summary.append(el('span', `${s.title || 'Session'} · ${display.label}`, 'tree-title'), el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
         if (classification.attentionRequired) summary.append(el('span', 'Attention in this branch', 'attention-summary'));
         container.append(summary);
       }
       const card = el('article', undefined, 'session-card');
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
-      info.append(el('strong', s.title), el('p', `${i.host} · ${i.directory}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
+      info.append(el('strong', s.title || 'Session'), el('p', i.directory ? `${i.host} · ${i.directory}` : i.host, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
       if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
       if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
       if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
