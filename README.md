@@ -1,5 +1,7 @@
 # OpenCode Supervisor
 
+> **Note:** This project is AI-generated, and not all features or configurations have been tested.
+
 A Linux-friendly, browser-based GUI for watching many OpenCode instances across projects and computers. A small OpenCode plugin reports to a central Node.js companion; the companion serves the dashboard. No runtime npm dependencies or build step.
 
 - Counts online computers, OpenCode instances, active root agents, and active subagents.
