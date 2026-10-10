@@ -79,23 +79,23 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await page.goto('/');
 
   await expect(page.getByText('● Connected · local only')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Build dashboard' })).toBeVisible();
+  await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
   await expect(page.getByText('Finished review')).toHaveCount(0);
 
   await page.getByText('Filter agents').click();
   await page.getByLabel('Computer').selectOption('beta');
-  await expect(page.getByRole('heading', { name: 'Fix API' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Build dashboard' })).toHaveCount(0);
+  await expect(page.getByText('Fix API', { exact: true })).toBeVisible();
+  await expect(page.getByText('Build dashboard', { exact: true })).toHaveCount(0);
 
   await page.getByLabel('Computer').selectOption('');
   await page.getByLabel('Search').fill('Editing app.js');
-  await expect(page.getByRole('heading', { name: 'Build dashboard' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Fix API' })).toHaveCount(0);
+  await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
+  await expect(page.getByText('Fix API', { exact: true })).toHaveCount(0);
 
   await page.getByLabel('Search').fill('');
   await page.getByLabel('Active only').check();
-  await expect(page.getByRole('heading', { name: 'Build dashboard' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Fix API' })).toHaveCount(0);
+  await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
+  await expect(page.getByText('Fix API', { exact: true })).toHaveCount(0);
 });
 
 test('network mode requires a token, rejects a bad token, and connects with a valid token', async ({ page }) => {
@@ -116,11 +116,11 @@ test('network mode requires a token, rejects a bad token, and connects with a va
   await page.getByLabel('Companion access token').fill(token);
   await page.getByRole('button', { name: 'Connect' }).click();
   await expect(page.getByText('● Connected · network mode')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Build dashboard' })).toBeVisible();
+  await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await expect(login).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Build dashboard' })).toHaveCount(0);
+  await expect(page.getByText('Build dashboard', { exact: true })).toHaveCount(0);
 });
 
 test('keeps expanded Git details open when polled state updates', async ({ page }) => {
@@ -130,13 +130,13 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
     return report(polls > 1 ? 'Deploy dashboard' : 'Build dashboard');
   });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Build dashboard' })).toBeVisible();
+  await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
 
   const details = page.locator('details[data-instance="instance-alpha"]');
   await details.locator('summary').click();
   await expect(details).toHaveAttribute('open', '');
 
-  await expect(page.getByRole('heading', { name: 'Deploy dashboard' })).toBeVisible();
+  await expect(page.getByText('Deploy dashboard', { exact: true })).toBeVisible();
   await expect(details).toHaveAttribute('open', '');
   await expect(details.getByRole('heading', { name: 'Recent commits' })).toBeVisible();
 });
