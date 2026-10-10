@@ -11,11 +11,12 @@ export function classifySessions(sessions, online) {
   const classifications = new Map(sessions.map(session => {
     let category;
     if (!online) category = 'offline';
-    else if (session.status === 'waiting' || session.status === 'error') category = 'attention';
+    else if (session.status === 'waiting' || session.status === 'error') category = 'needs-attention';
     else if (session.status === 'busy' || session.status === 'retry') category = 'working';
-    else if (session.status === 'idle' && session.parentID) category = 'recent-finished';
-    else category = 'waiting';
-    return [session.id, { category, attentionRequired: category === 'attention', childAttentionCount: 0 }];
+    else if (session.status === 'idle' && session.parentID) category = 'recently-finished';
+    else if (session.status === 'idle') category = 'waiting-for-input';
+    else category = 'unknown';
+    return [session.id, { category, attentionRequired: category === 'needs-attention', childAttentionCount: 0 }];
   }));
 
   const children = new Map();
@@ -51,10 +52,10 @@ export function isActiveCategory(classification) {
 export function sessionState(session, online, classification) {
   const category = classification?.category ?? classifySessions([session], online).get(session.id).category;
   if (category === 'offline') return { label: 'Offline', className: '', activity: 'Disconnected · last reported activity below', detail: 'No recent heartbeat from this instance.' };
-  if (category === 'recent-finished') return { label: 'Idle', className: 'finished', activity: 'Idle · available if recalled', detail: 'This subagent is idle and can run again if its parent resumes it.' };
-  if (category === 'waiting') return { label: 'Waiting for input', className: 'input', activity: session.activity || 'Waiting for input', detail: 'This main agent is idle and ready for user input.' };
-  if (category === 'attention') return session.status === 'waiting'
+  if (category === 'recently-finished') return { label: 'Idle', className: 'finished', activity: 'Idle · available if recalled', detail: 'This subagent is idle and can run again if its parent resumes it.' };
+  if (category === 'waiting-for-input') return { label: 'Waiting for input', className: 'input', activity: session.activity || 'Waiting for input', detail: 'This main agent is idle and ready for user input.' };
+  if (category === 'needs-attention') return session.status === 'waiting'
     ? { label: 'Waiting for permission', className: 'permission', activity: session.activity || 'Waiting for permission', detail: 'Permission is required to continue.' }
     : { label: 'Error · attention required', className: 'permission', activity: session.activity || 'Session error', detail: 'This session encountered an error and needs attention.' };
-  return { label: session.status, className: 'busy', activity: session.activity || 'Ready', detail: '' };
+  return { label: session.status, className: '', activity: session.activity || session.status || 'Unknown state', detail: 'Unrecognized OpenCode lifecycle state.' };
 }

@@ -64,7 +64,7 @@ test('classification separates intervention, work, input, finished, and offline 
   ];
   const classified = classifySessions(sessions, true);
   assert.deepEqual(sessions.map(s => classified.get(s.id).category), [
-    'attention', 'attention', 'working', 'working', 'waiting', 'recent-finished',
+    'needs-attention', 'needs-attention', 'working', 'working', 'waiting-for-input', 'recently-finished',
   ]);
   assert.equal(isActiveCategory(classified.get('permission')), true);
   assert.equal(isActiveCategory(classified.get('busy')), true);
@@ -80,6 +80,15 @@ test('offline classification takes precedence over a stale permission wait', () 
   assert.equal(isActiveCategory(classification), false);
   assert.equal(sessionState(session, false, classification).label, 'Offline');
   assert.equal(session.status, 'waiting');
+});
+
+test('unknown lifecycle states remain distinct and are not treated as active', () => {
+  const session = { id: 'unknown', status: 'future-opencode-state' };
+  const classification = classifySessions([session], true).get(session.id);
+  assert.equal(classification.category, 'unknown');
+  assert.equal(isActiveCategory(classification), false);
+  assert.equal(sessionState(session, true, classification).label, 'future-opencode-state');
+  assert.equal(session.status, 'future-opencode-state');
 });
 
 test('parent summaries inherit attention from children and nested descendants', () => {
