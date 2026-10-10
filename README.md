@@ -5,7 +5,7 @@ A Linux-friendly, browser-based GUI for watching many OpenCode instances across 
 - Counts online computers, OpenCode instances, active root agents, and active subagents.
 - Shows session titles, agent roles, tool activity, working folders, parent relationships, permission waits, and task lists.
 - Shows Git status, the last 12 commits, and worktrees for each instance's project.
-- Filters by computer, text, or active sessions. **Hide finished subagents** is enabled by default: it hides idle subagents, keeps idle main agents visible, and automatically reveals subagents when they resume. Uncheck it to inspect finished sessions. Each project shows how many finished subagents are hidden. Expand **Git workspace** for repository details.
+- The **Agents** section has a collapsible **Filter agents** panel, folded by default. It filters by computer, text, or active sessions, and can hide idle main agents waiting for input. **Hide offline agents** is enabled by default. **Hide finished subagents** is enabled by default: it hides idle subagents, keeps idle main agents visible, and automatically reveals subagents when they resume. Uncheck it to inspect finished sessions. Each project shows how many finished subagents are hidden. Git workspaces show status, recent commits, and worktrees under **Git workspace**; non-Git folders have no Git panel.
 - Reports every five seconds and on events; the GUI polls every two seconds. Missing instances turn offline after 20 seconds and expire after 24 hours.
 
 The GUI runs in Firefox, Chromium, or another modern Linux browser. This is a monitoring application: start OpenCode instances normally in your terminals. It does not launch agents, issue prompts, or modify repositories.

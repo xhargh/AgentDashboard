@@ -14,9 +14,12 @@ function render() {
   $('host').value = selected;
   const query = $('search').value.toLowerCase();
   const fleet = $('fleet'); fleet.replaceChildren();
+  let hiddenOffline = 0;
   for (const i of instances.filter(i => !selected || i.host === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
+    if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
     const hiddenFinished = $('hide-finished').checked ? i.sessions.filter(s => s.parentID && s.status === 'idle').length : 0;
     const visible = i.sessions.filter(s => (!$('hide-finished').checked || !s.parentID || s.status !== 'idle') &&
+      (!$('hide-waiting').checked || !i.online || s.parentID || s.status !== 'idle') &&
       (!$('active').checked || (i.online && active(s))) &&
       `${i.host} ${i.directory} ${s.title} ${s.directory} ${s.activity} ${s.agent}`.toLowerCase().includes(query));
     if (!visible.length && ($('active').checked || query && !`${i.host} ${i.directory}`.toLowerCase().includes(query))) continue;
@@ -38,12 +41,22 @@ function render() {
     }
     if (hiddenFinished) card.append(el('p', `${hiddenFinished} finished subagent${hiddenFinished === 1 ? '' : 's'} hidden`, 'empty'));
     if (!visible.length && !hiddenFinished) card.append(el('p', i.sessions.length ? 'No sessions match the current filters.' : i.online ? 'Connected. Waiting for session activity.' : 'Offline. No session activity recorded.', 'empty'));
-    const details = el('details'); details.dataset.instance = i.instanceId; const summary = el('summary', 'Git workspace'); details.append(summary);
-    if (i.git?.unavailable) details.append(el('p', i.git.unavailable, 'muted'));
-    else { const grid = el('div', undefined, 'git-grid'); for (const [key, label] of [['status', 'Status'], ['log', 'Recent commits'], ['worktrees', 'Worktrees']]) { const block = el('section'); block.append(el('h4', label), el('pre', typeof i.git?.[key] === 'string' ? i.git[key] || 'Clean / empty' : 'Waiting for Git snapshot')); grid.append(block); } details.append(grid); }
-    card.append(details); fleet.append(card);
+    if (i.git?.root) {
+      const details = el('details'); details.dataset.instance = i.instanceId; const summary = el('summary', 'Git workspace'); details.append(summary);
+      const grid = el('div', undefined, 'git-grid');
+      for (const [key, label] of [['status', 'Status'], ['log', 'Recent commits'], ['worktrees', 'Worktrees']]) {
+        const block = el('section'); block.append(el('h4', label), el('pre', typeof i.git[key] === 'string' ? i.git[key] || 'Clean / empty' : 'Waiting for Git snapshot')); grid.append(block);
+      }
+      details.append(grid); card.append(details);
+    }
+    fleet.append(card);
   }
-  if (!fleet.children.length) { const empty = el('div', undefined, 'empty'); empty.append(el('h3', instances.length ? 'No matching agents' : 'Ready for your first agent'), el('p', instances.length ? 'Adjust the filters to see more activity.' : 'Install the plugin and start OpenCode. For other computers, configure the companion URL and token.')); fleet.append(empty); }
+  if (!fleet.children.length) {
+    const empty = el('div', undefined, 'empty');
+    const hidden = hiddenOffline ? `${hiddenOffline} offline instance${hiddenOffline === 1 ? '' : 's'} hidden. ` : '';
+    empty.append(el('h3', instances.length ? 'No matching agents' : 'Ready for your first agent'), el('p', instances.length ? `${hidden}Adjust the filters to see more activity.` : 'Install the plugin and start OpenCode. For other computers, configure the companion URL and token.'));
+    fleet.append(empty);
+  }
 }
 async function poll() {
   if ((authRequired && !token) || pending) return;
@@ -69,6 +82,6 @@ async function poll() {
 }
 $('login').addEventListener('submit', e => { e.preventDefault(); token = $('token').value.trim(); $('token').value = ''; void poll(); });
 $('logout').onclick = () => { token = ''; instances = []; $('dashboard').hidden = true; $('login').hidden = false; $('logout').hidden = true; $('connection').textContent = 'Disconnected'; };
-for (const id of ['host', 'search', 'active', 'hide-finished']) $(id).addEventListener('input', render);
+for (const id of ['host', 'search', 'active', 'hide-finished', 'hide-waiting', 'hide-offline']) $(id).addEventListener('input', render);
 void poll();
 setInterval(poll, 2000);

@@ -5,7 +5,9 @@
 /* All fleet controls share one panel and the same field/option spacing. */
 .fleet-heading{margin:28px 0 16px}
 .filters{padding:20px;margin-bottom:20px;border:1px solid #33445f;border-radius:12px;background:#151e2b}
-.filters h3{font-size:14px;margin:0 0 16px;color:#b8c9df}
+.filters>summary{font-size:14px;font-weight:600;color:#b8c9df}
+.filters[open]>summary{margin-bottom:16px}
+.filters[open]{padding-bottom:20px}
 .filter-fields{display:grid;grid-template-columns:minmax(180px,1fr) minmax(0,2fr);gap:16px}
 .filter-fields label{display:flex;flex-direction:column;gap:7px;font-size:12px;font-weight:600;color:#9aabc2;min-width:0}
 .filter-fields input,.filter-fields select{width:100%;min-width:0;font-size:14px;font-weight:400}
