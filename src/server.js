@@ -11,10 +11,13 @@ function equal(a, b) { const x = Buffer.from(a || ''), y = Buffer.from(b); retur
 function validReport(v) {
   return v && typeof v.instanceId === 'string' && v.instanceId.length <= 100 &&
     (v.machineId === undefined || typeof v.machineId === 'string' && v.machineId.length <= 100) &&
-    typeof v.host === 'string' && v.host.length <= 200 && typeof v.directory === 'string' &&
+    typeof v.host === 'string' && v.host.length <= 200 && (v.directory === undefined || typeof v.directory === 'string') &&
     Array.isArray(v.sessions) && v.sessions.length <= 1000 && v.sessions.every(s => s && typeof s.id === 'string' &&
-      typeof s.status === 'string' && typeof s.title === 'string' && typeof s.directory === 'string') &&
-    v.git && typeof v.git === 'object' && !Array.isArray(v.git);
+      typeof s.status === 'string' && (s.title === undefined || typeof s.title === 'string') &&
+      (s.directory === undefined || typeof s.directory === 'string') &&
+      (s.activity === undefined || typeof s.activity === 'string') && (s.agent === undefined || typeof s.agent === 'string') &&
+      (s.todos === undefined || Array.isArray(s.todos))) &&
+    (v.git === undefined || v.git && typeof v.git === 'object' && !Array.isArray(v.git));
 }
 export function createServer({ token, now = Date.now } = {}) {
   if (token && token.length < 24) throw new Error('SUPERVISOR_TOKEN must contain at least 24 characters');
