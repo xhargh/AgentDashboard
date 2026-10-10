@@ -2,10 +2,12 @@
 
 The Playwright suite runs Chromium against the real dashboard and serves deterministic API fixtures in the browser. It does not need a running OpenCode process, a companion token, or external network services.
 
-From the repository root:
+The recommended host-independent setup is the Docker workflow documented in the root [README](../../README.md#run-all-ci-checks-in-docker). It installs dependencies and runs unit, syntax, and browser checks inside the container.
+
+For direct host execution from the repository root:
 
 ```sh
-npm install
+npm ci
 npx playwright install chromium
 npm run test:e2e
 ```
