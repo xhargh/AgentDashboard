@@ -2,8 +2,7 @@ import { expect, test } from '@playwright/test';
 
 const token = 'e2e-network-token-with-at-least-24-characters';
 
-function report(title = 'Build dashboard', status = 'busy') {
-  const now = Date.now();
+function report(title = 'Build dashboard', status = 'busy', now = Date.now()) {
   return {
     mode: 'local',
     serverTime: now,
@@ -29,6 +28,17 @@ function report(title = 'Build dashboard', status = 'busy') {
             id: 'child-alpha',
             parentID: 'root-alpha',
             title: 'Finished review',
+            status: 'idle',
+            stateChangedAt: new Date(now - 30_000).toISOString(),
+            directory: '/work/alpha/app',
+            activity: 'Review complete',
+            agent: 'review',
+            todos: [],
+          },
+          {
+            id: 'child-unknown-time',
+            parentID: 'root-alpha',
+            title: 'Unknown-age review',
             status: 'idle',
             directory: '/work/alpha/app',
             activity: 'Review complete',
@@ -84,7 +94,8 @@ async function installStateFixture(page, handler) {
 }
 
 test('local mode connects automatically and filters fleet activity', async ({ page }) => {
-  await installStateFixture(page, () => report());
+  await page.clock.install({ time: new Date(120_000) });
+  await installStateFixture(page, () => report('Build dashboard', 'busy', 120_000));
   await page.goto('/');
 
   await expect(page.getByText('● Connected · local only')).toBeVisible();
@@ -93,8 +104,9 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(page.getByText('Approve deployment', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Working · 1' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Waiting for input · 1' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Recently finished · 1' })).toHaveCount(0);
-  await expect(page.getByText('Finished review')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Recently finished · 2' })).toBeVisible();
+  await expect(page.getByText('Finished review')).toBeVisible();
+  await expect(page.getByText('Unknown-age review')).toBeVisible();
 
   await page.getByText('Filter agents').click();
   await page.getByLabel('Computer').selectOption('beta');
@@ -147,7 +159,7 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
   await page.goto('/');
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
 
-  const details = page.locator('details[data-instance="instance-alpha"]');
+  const details = page.locator('.group-working details[data-instance="instance-alpha"]');
   await details.locator('summary').click();
   await expect(details).toHaveAttribute('open', '');
 

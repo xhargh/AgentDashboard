@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Readable } from 'node:stream';
 import { createServer } from '../src/server.js';
-import { SupervisorPlugin } from '../src/plugin.js';
+import { retryDelay, SupervisorPlugin } from '../src/plugin.js';
 const token = 'test-token-with-at-least-24-characters';
 async function start(t, options = {}) {
   const server = createServer({ token, ...options });
@@ -29,6 +29,11 @@ async function start(t, options = {}) {
   return { url, dispatch, request: (path, init = {}) => dispatch(path, { ...init, headers: { authorization: `Bearer ${token}`, ...init.headers } }) };
 }
 const report = (id = 'one', host = 'alpha') => ({ instanceId: id, host, directory: '/work/project', sessions: [{ id: 'parent', title: 'Build', directory: '/work/project', status: 'busy' }], git: {} });
+test('retry delay grows exponentially, is jittered, and remains bounded', () => {
+  assert.equal(retryDelay(1, () => 0), 500);
+  assert.equal(retryDelay(2, () => 1), 2000);
+  assert.equal(retryDelay(100, () => 1), 60000);
+});
 test('requires a strong shared token', () => assert.throws(() => createServer({ token: 'short' })));
 test('authenticated reporting, multiple hosts, stale and expired instances', async t => {
   let time = 1000; const { request } = await start(t, { now: () => time });
@@ -36,6 +41,93 @@ test('authenticated reporting, multiple hosts, stale and expired instances', asy
   let state = await (await request('/api/state')).json(); assert.equal(state.instances.length, 2); assert.ok(state.instances.every(i => i.online));
   time += 21000; state = await (await request('/api/state')).json(); assert.ok(state.instances.every(i => !i.online));
   time += 86400000; assert.equal((await (await request('/api/state')).json()).instances.length, 0);
+});
+test('accepts legacy reports without a machine identity', async t => {
+  const { request } = await start(t);
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(report()) })).status, 200);
+  const state = await (await request('/api/state')).json();
+  assert.equal(state.instances[0].machineId, undefined);
+});
+test('state revision changes only for meaningful reports and derived transitions', async t => {
+  let time = 1000;
+  const { request } = await start(t, { now: () => time });
+  const send = value => request('/api/report', { method: 'POST', body: JSON.stringify(value) });
+  await send(report());
+  let response = await request('/api/state');
+  let state = await response.json();
+  assert.equal(state.revision, 1);
+  assert.equal(response.headers.get('etag'), '"1"');
+
+  time += 5000;
+  await send(report());
+  response = await request('/api/state', { headers: { 'if-none-match': '"1"' } });
+  assert.equal(response.status, 304);
+
+  const changed = report(); changed.sessions[0].status = 'waiting';
+  await send(changed);
+  response = await request('/api/state', { headers: { 'if-none-match': '"1"' } });
+  state = await response.json();
+  assert.equal(state.revision, 2);
+  assert.equal(state.instances[0].sessions[0].status, 'waiting');
+
+  time += 20000;
+  response = await request('/api/state', { headers: { 'if-none-match': '"2"' } });
+  state = await response.json();
+  assert.equal(state.revision, 3);
+  assert.equal(state.instances[0].online, false);
+
+  // A client without a validator (including one reconnecting after losing its cache) gets a full snapshot.
+  response = await request('/api/state');
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).instances.length, 1);
+});
+test('machine identity persists across plugin generations and distinguishes machines and concurrent processes', async t => {
+  const originalFetch = globalThis.fetch;
+  const old = Object.fromEntries(['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_HOST', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
+  const root = await mkdtemp(join(tmpdir(), 'supervisor-identity-'));
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(root, { recursive: true, force: true });
+  });
+  let time = Date.now();
+  const { request, dispatch } = await start(t, { now: () => time });
+  const plugins = [];
+  t.after(async () => {
+    for (const plugin of plugins) await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } });
+  });
+  globalThis.fetch = dispatch;
+  process.env.OPENCODE_SUPERVISOR_URL = 'http://localhost:4317';
+  process.env.OPENCODE_SUPERVISOR_TOKEN = token;
+  process.env.OPENCODE_SUPERVISOR_HOST = 'same-hostname';
+  const client = { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } };
+  const runAt = async config => {
+    process.env.XDG_CONFIG_HOME = config;
+    const plugin = await SupervisorPlugin({ directory: '/tmp', client });
+    plugins.push(plugin);
+    return plugin;
+  };
+  const [first, concurrent] = await Promise.all([runAt(join(root, 'machine-a')), runAt(join(root, 'machine-a'))]);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  let state = await (await request('/api/state')).json();
+  assert.equal(state.instances.length, 2);
+  assert.equal(new Set(state.instances.map(i => i.machineId)).size, 1);
+  assert.equal(new Set(state.instances.map(i => i.instanceId)).size, 2);
+  const oldGeneration = state.instances[0].instanceId;
+  await first.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } });
+  await concurrent.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } });
+  time += 21000;
+  await runAt(join(root, 'machine-a'));
+  await runAt(join(root, 'machine-b'));
+  await new Promise(resolve => setTimeout(resolve, 30));
+  state = await (await request('/api/state')).json();
+  const current = state.instances.filter(i => i.online);
+  assert.equal(current.length, 2);
+  assert.equal(new Set(current.map(i => i.machineId)).size, 2);
+  const restarted = current.find(i => i.machineId === state.instances.find(old => old.instanceId === oldGeneration).machineId);
+  assert.ok(restarted);
+  assert.notEqual(restarted.instanceId, oldGeneration);
+  assert.equal(new Set(current.map(i => i.host)).size, 1);
 });
 test('rejects unauthenticated, malformed, oversized and cross-origin requests', async t => {
   const { url, request, dispatch } = await start(t);
@@ -86,6 +178,76 @@ test('plugin refuses remote telemetry without a token', async t => {
   t.after(() => { if (old === undefined) delete process.env.OPENCODE_SUPERVISOR_URL; else process.env.OPENCODE_SUPERVISOR_URL = old; });
   process.env.OPENCODE_SUPERVISOR_URL = 'http://192.168.1.10:4317';
   assert.deepEqual(await SupervisorPlugin({ directory: '/tmp' }), {});
+});
+test('plugin classifies HTTP, network, and timeout report failures without leaking details', async t => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const oldUrl = process.env.OPENCODE_SUPERVISOR_URL;
+  const oldToken = process.env.OPENCODE_SUPERVISOR_TOKEN;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+    if (oldUrl === undefined) delete process.env.OPENCODE_SUPERVISOR_URL;
+    else process.env.OPENCODE_SUPERVISOR_URL = oldUrl;
+    if (oldToken === undefined) delete process.env.OPENCODE_SUPERVISOR_TOKEN;
+    else process.env.OPENCODE_SUPERVISOR_TOKEN = oldToken;
+  });
+  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
+  process.env.OPENCODE_SUPERVISOR_TOKEN = 'secret-token-that-must-not-be-logged';
+
+  const cases = [
+    [401, 'authentication (HTTP 401)'], [403, 'authentication (HTTP 403)'],
+    [400, 'rejected report (HTTP 400)'], [413, 'rejected report (HTTP 413)'],
+    [500, 'server failure (HTTP 500)'], [503, 'server failure (HTTP 503)'],
+    ['network', 'network failure'], ['timeout', 'timeout'],
+  ];
+  for (const [failure, expected] of cases) {
+    const warnings = [];
+    console.warn = message => warnings.push(message);
+    globalThis.fetch = async () => {
+      if (failure === 'network') throw new TypeError('private network details');
+      if (failure === 'timeout') {
+        const error = new Error('private timeout details'); error.name = 'TimeoutError'; throw error;
+      }
+      return new Response('private response body', { status: failure });
+    };
+    const plugin = await SupervisorPlugin({ directory: '/tmp' });
+    for (let n = 0; n < 100 && warnings.length === 0; n++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(warnings.length, 1, `${failure} should produce one diagnostic`);
+    assert.match(warnings[0], new RegExp(expected.replace(/[()]/g, '\\$&')));
+    assert.doesNotMatch(warnings[0], /secret-token|private/);
+    await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } });
+  }
+});
+test('plugin backs off repeated failures, rate-limits diagnostics, and recovers on retry', async t => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const old = Object.fromEntries(['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
+  const root = await mkdtemp(join(tmpdir(), 'supervisor-retry-'));
+  t.after(async () => {
+    globalThis.fetch = originalFetch; console.warn = originalWarn;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(root, { recursive: true, force: true });
+  });
+  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
+  process.env.OPENCODE_SUPERVISOR_TOKEN = 'test-token';
+  process.env.XDG_CONFIG_HOME = root;
+  let requests = 0, recovered = false;
+  const warnings = [];
+  console.warn = message => warnings.push(message);
+  globalThis.fetch = async () => {
+    requests++;
+    return recovered ? new Response('', { status: 200 }) : new Response('', { status: 503 });
+  };
+  const plugin = await SupervisorPlugin({ directory: '/tmp' });
+  t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
+  for (let n = 0; n < 100 && requests < 2; n++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(requests >= 2 && requests <= 5, `unexpected retry count ${requests}`);
+  assert.equal(warnings.length, 1);
+  recovered = true;
+  for (let n = 0; n < 100 && requests < 3; n++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(requests >= 3, 'retry should recover after the endpoint becomes available');
+  assert.equal(warnings.length, 1);
 });
 test('local mode allows token-free reports and rejects remote peers, rebinding and foreign origins', async t => {
   const { dispatch } = await start(t, { token: undefined });
