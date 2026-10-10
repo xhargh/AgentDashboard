@@ -156,6 +156,31 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
   await expect(details.getByRole('heading', { name: 'Recent commits' })).toBeVisible();
 });
 
+test('updates keyed session nodes across rapid state changes and removes deleted sessions', async ({ page }) => {
+  let polls = 0;
+  await installStateFixture(page, () => {
+    polls++;
+    const state = report(polls === 1 ? 'Build dashboard' : polls === 2 ? 'Deploy dashboard' : 'Ship dashboard', polls < 3 ? 'busy' : 'error');
+    if (polls >= 4) state.instances[0].sessions = state.instances[0].sessions.filter(session => session.id !== 'root-alpha');
+    return state;
+  });
+  await page.goto('/');
+  const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  await expect(root).toBeVisible();
+  await page.evaluate(() => { window.stableSessionNode = document.querySelector('[data-agent-key="instance-alpha:root-alpha"]'); });
+  const search = page.getByLabel('Search');
+  await search.fill('dashboard');
+  await search.evaluate(input => { input.focus(); input.setSelectionRange(3, 6); });
+  await expect(page.getByText('Deploy dashboard', { exact: true })).toBeVisible();
+  await expect(page.getByText('Ship dashboard', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.querySelector('[data-agent-key="instance-alpha:root-alpha"]') === window.stableSessionNode)).toBe(true);
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue('dashboard');
+  await expect.poll(() => search.evaluate(input => input.selectionStart === 3 && input.selectionEnd === 6)).toBe(true);
+  await expect(page.getByText('Ship dashboard', { exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-agent-key="instance-alpha:root-alpha"]')).toHaveCount(0);
+});
+
 test('renders nested agents, preserves expansion, surfaces descendant attention, and keeps orphans and cycles accessible', async ({ page }) => {
   let polls = 0;
   await installStateFixture(page, () => {

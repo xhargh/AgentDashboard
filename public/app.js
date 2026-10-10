@@ -7,6 +7,33 @@ const originalTitle = document.title;
 const expandedAgents = new Set();
 const expandedActivity = new Set();
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
+function reconcile(parent, desired) {
+  if (!parent.querySelectorAll) { parent.replaceChildren(...desired.children); return; }
+  const keyed = new Map([...parent.querySelectorAll('[data-agent-key]')].map(node => [node.dataset.agentKey, node]));
+  function sync(current, next) {
+    if (current.nodeType === Node.TEXT_NODE) { if (current.textContent !== next.textContent) current.textContent = next.textContent; return current; }
+    for (const attr of [...current.attributes]) if (!(current.tagName === 'DETAILS' && attr.name === 'open') && !next.hasAttribute(attr.name)) current.removeAttribute(attr.name);
+    for (const attr of [...next.attributes]) if (!(current.tagName === 'DETAILS' && attr.name === 'open') && current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value);
+    reconcileChildren(current, [...next.childNodes]);
+    return current;
+  }
+  function reconcileChildren(target, children) {
+    let position = 0;
+    for (const next of children) {
+      const key = next.dataset?.agentKey;
+      let current = key ? keyed.get(key) : target.childNodes[position];
+      if (!key && current?.dataset?.agentKey) current = null;
+      if (current && (current.nodeType !== next.nodeType || current.nodeName !== next.nodeName)) current = null;
+      if (!current) current = next;
+      else sync(current, next);
+      const atPosition = target.childNodes[position];
+      if (atPosition !== current) target.insertBefore(current, atPosition || null);
+      position++;
+    }
+    while (target.childNodes.length > position) target.lastChild.remove();
+  }
+  reconcileChildren(parent, [...desired.childNodes]);
+}
 const eventKinds = {
   created: ['Session created', 'activity-created'], busy: ['Working', 'activity-work'], idle: ['Became idle', 'activity-complete'],
   waiting: ['Permission requested', 'activity-permission'], error: ['Error', 'activity-error'], retry: ['Retrying', 'activity-work'],
@@ -22,16 +49,21 @@ function render() {
   const sessionClassifications = new Map(instances.map(i => [i.instanceId, classifySessions(i.sessions, i.online)]));
   const classificationsFor = i => sessionClassifications.get(i.instanceId);
   const sessions = online.flatMap(i => i.sessions.map(s => ({ session: s, classification: classificationsFor(i).get(s.id) })));
-  $('metrics').replaceChildren(...[
+  const metrics = el('div');
+  metrics.append(...[
     ['Computers online', new Set(online.map(i => i.host)).size], ['OpenCode instances', online.length],
     ['Active agents', sessions.filter(({ session, classification }) => !session.parentID && isActiveCategory(classification)).length],
     ['Active subagents', sessions.filter(({ session, classification }) => session.parentID && isActiveCategory(classification)).length],
   ].map(([label, value]) => { const n = el('article', undefined, 'metric'); n.append(el('span', label), el('strong', value)); return n; }));
+  reconcile($('metrics'), metrics);
   const selected = $('host').value;
-  $('host').replaceChildren(new Option('All computers', ''), ...[...new Set(instances.map(i => i.host))].sort().map(h => new Option(h, h)));
+  const hosts = [...new Set(instances.map(i => i.host))].sort();
+  if (!$('host').options || $('host').options.length !== hosts.length + 1 || hosts.some((host, index) => $('host').options[index + 1]?.value !== host)) {
+    $('host').replaceChildren(new Option('All computers', ''), ...hosts.map(h => new Option(h, h)));
+  }
   $('host').value = selected;
   const query = $('search').value.toLowerCase();
-  const fleet = $('fleet'); fleet.replaceChildren();
+  const fleet = el('div');
   const groups = [
     ['needs-attention', 'Needs attention', 'Permission requests and errors', []],
     ['working', 'Working', 'Currently active sessions', []],
@@ -123,6 +155,7 @@ function render() {
     empty.append(el('h3', instances.length ? 'No sessions match the current filters' : 'Ready for your first agent'), el('p', instances.length ? 'Adjust the filters to see more activity.' : 'Install the plugin and start OpenCode. For other computers, configure the companion URL and token.'));
     fleet.append(empty);
   }
+  reconcile($('fleet'), fleet);
 }
 function updateAttentionNotifications(nextInstances) {
   const live = nextInstances.filter(i => i.online);
