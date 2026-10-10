@@ -45,6 +45,15 @@ function report(title = 'Build dashboard', status = 'busy', now = Date.now()) {
             agent: 'review',
             todos: [],
           },
+          {
+            id: 'permission-alpha',
+            title: 'Approve deployment',
+            status: 'waiting',
+            directory: '/work/alpha/app',
+            activity: 'Waiting for permission',
+            agent: 'build',
+            todos: [],
+          },
         ],
         git: { root: '/work/alpha/app', status: 'clean', log: 'abc123 Initial commit', worktrees: '' },
       },
@@ -91,6 +100,11 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
 
   await expect(page.getByText('● Connected · local only')).toBeVisible();
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Needs attention · 1' })).toBeVisible();
+  await expect(page.getByText('Approve deployment', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Working · 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Waiting for input · 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Recently finished · 2' })).toBeVisible();
   await expect(page.getByText('Finished review')).toBeVisible();
   await expect(page.getByText('Unknown-age review')).toBeVisible();
 
@@ -102,6 +116,7 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await page.getByLabel('Computer').selectOption('');
   await page.getByLabel('Search').fill('Editing app.js');
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
+  await expect(page.getByText('Approve deployment', { exact: true })).toHaveCount(0);
   await expect(page.getByText('Fix API', { exact: true })).toHaveCount(0);
 
   await page.getByLabel('Search').fill('');
@@ -144,7 +159,7 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
   await page.goto('/');
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
 
-  const details = page.locator('details[data-instance="instance-alpha"]');
+  const details = page.locator('.group-working details[data-instance="instance-alpha"]');
   await details.locator('summary').click();
   await expect(details).toHaveAttribute('open', '');
 
@@ -161,8 +176,7 @@ test('renders status-only instances with optional metadata omitted', async ({ pa
   }] }));
   await page.goto('/');
 
-  await expect(page.locator('#fleet article.instance').getByText('private-host', { exact: true })).toBeVisible();
-  await expect(page.getByText('Monitored instance', { exact: true })).toBeVisible();
+  await expect(page.locator('#host option').filter({ hasText: 'private-host' })).toHaveCount(1);
   await expect(page.getByText('Session', { exact: true })).toBeVisible();
   await expect(page.locator('#fleet .badge').getByText('busy', { exact: true })).toBeVisible();
 });
