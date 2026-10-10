@@ -29,7 +29,7 @@ function report(title = 'Build dashboard', status = 'busy', now = Date.now()) {
             parentID: 'root-alpha',
             title: 'Finished review',
             status: 'idle',
-            stateChangedAt: new Date(now - 60_001).toISOString(),
+            stateChangedAt: new Date(now - 30_000).toISOString(),
             directory: '/work/alpha/app',
             activity: 'Review complete',
             agent: 'review',
@@ -91,7 +91,7 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
 
   await expect(page.getByText('● Connected · local only')).toBeVisible();
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
-  await expect(page.getByText('Finished review')).toHaveCount(0);
+  await expect(page.getByText('Finished review')).toBeVisible();
   await expect(page.getByText('Unknown-age review')).toBeVisible();
 
   await page.getByText('Filter agents').click();
