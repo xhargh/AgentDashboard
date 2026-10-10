@@ -44,6 +44,39 @@ export function classifySessions(sessions, online) {
   return classifications;
 }
 
+export function buildSessionTree(sessions) {
+  const nodes = new Map(sessions.map(session => [session.id, { session, children: [] }]));
+  const roots = [];
+  const parentById = new Map();
+  for (const session of sessions) {
+    if (nodes.has(session.parentID) && session.parentID !== session.id) parentById.set(session.id, session.parentID);
+  }
+
+  // Break one edge in each parent cycle, choosing the earliest session as its root.
+  const settled = new Set();
+  for (const session of sessions) {
+    const path = [], positions = new Map();
+    let id = session.id;
+    while (parentById.has(id) && !settled.has(id)) {
+      if (positions.has(id)) {
+        const cycle = path.slice(positions.get(id));
+        const root = cycle.reduce((first, candidate) => sessions.indexOf(nodes.get(candidate).session) < sessions.indexOf(nodes.get(first).session) ? candidate : first);
+        parentById.delete(root);
+        break;
+      }
+      positions.set(id, path.length); path.push(id); id = parentById.get(id);
+    }
+    path.forEach(item => settled.add(item));
+  }
+
+  for (const session of sessions) {
+    const node = nodes.get(session.id), parentID = parentById.get(session.id);
+    if (parentID && nodes.has(parentID)) nodes.get(parentID).children.push(node);
+    else roots.push(node);
+  }
+  return roots;
+}
+
 export function isActiveCategory(classification) {
   return classification?.category === 'working' || classification?.attentionRequired === true;
 }

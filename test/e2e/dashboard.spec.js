@@ -99,19 +99,21 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await page.goto('/');
 
   await expect(page.getByText('● Connected · local only')).toBeVisible();
-  await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
+  await expect(page.locator('.tree-title').filter({ hasText: 'Build dashboard' })).toHaveCount(1);
   await expect(page.getByRole('heading', { name: 'Needs attention · 1' })).toBeVisible();
   await expect(page.getByText('Approve deployment', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Working · 1' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Waiting for input · 1' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Recently finished · 2' })).toBeVisible();
-  await expect(page.getByText('Finished review')).toBeVisible();
-  await expect(page.getByText('Unknown-age review')).toBeVisible();
+  const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
+  await expect(root.locator(':scope > summary')).toContainText('2 children');
+  await root.locator(':scope > summary').click();
+  await expect(page.getByText('Finished review', { exact: true })).toBeVisible();
+  await expect(page.getByText('Unknown-age review', { exact: true })).toBeVisible();
 
   await page.getByText('Filter agents').click();
   await page.getByLabel('Computer').selectOption('beta');
   await expect(page.getByText('Fix API', { exact: true })).toBeVisible();
-  await expect(page.getByText('Build dashboard', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.tree-title').filter({ hasText: 'Build dashboard' })).toHaveCount(0);
 
   await page.getByLabel('Computer').selectOption('');
   await page.getByLabel('Search').fill('Editing app.js');
@@ -122,7 +124,7 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await page.getByLabel('Search').fill('');
   await page.locator('#active').check();
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
-  await expect(page.getByText('Fix API', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.tree-title').filter({ hasText: 'Fix API' })).toHaveCount(0);
 });
 
 test('network mode requires a token, rejects a bad token, and connects with a valid token', async ({ page }) => {
@@ -143,7 +145,7 @@ test('network mode requires a token, rejects a bad token, and connects with a va
   await page.getByLabel('Companion access token').fill(token);
   await page.getByRole('button', { name: 'Connect' }).click();
   await expect(page.getByText('● Connected · network mode')).toBeVisible();
-  await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
+  await expect(page.locator('.tree-title').filter({ hasText: 'Build dashboard' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await expect(login).toBeVisible();
@@ -157,13 +159,15 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
     return report(polls > 1 ? 'Deploy dashboard' : 'Build dashboard');
   });
   await page.goto('/');
-  await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
+  await expect(page.locator('.tree-title').filter({ hasText: 'Build dashboard' })).toBeVisible();
 
-  const details = page.locator('.group-working details[data-instance="instance-alpha"]');
-  await details.locator('summary').click();
+  const tree = page.locator('.group-working details[data-agent-key="instance-alpha:root-alpha"]');
+  await tree.locator(':scope > summary').click();
+  const details = tree.locator('article details[data-instance="instance-alpha"]');
+  await details.locator(':scope > summary').click();
   await expect(details).toHaveAttribute('open', '');
 
-  await expect(page.getByText('Deploy dashboard', { exact: true })).toBeVisible();
+  await expect(page.locator('.tree-title').filter({ hasText: 'Deploy dashboard' })).toBeVisible();
   await expect(details).toHaveAttribute('open', '');
   await expect(details.getByRole('heading', { name: 'Recent commits' })).toBeVisible();
 });
@@ -191,6 +195,40 @@ test('distinguishes replaced instances from instances that are merely offline', 
   await page.getByText('Filter agents', { exact: true }).click();
   await page.locator('#hide-offline').uncheck();
 
-  await expect(page.locator('#fleet').getByText(/↻ Replaced · PID 42 · \d+s ago/)).toBeVisible();
-  await expect(page.locator('#fleet').getByText(/○ Offline · PID 43 · \d+s ago/)).toBeVisible();
+  await expect(page.locator('#fleet').getByText(/alpha · ↻ Replaced · PID 42/)).toBeVisible();
+  await expect(page.locator('#fleet').getByText(/beta · ○ Offline · PID 43/)).toBeVisible();
+});
+
+test('renders nested agents, preserves expansion, surfaces descendant attention, and keeps orphans and cycles accessible', async ({ page }) => {
+  let polls = 0;
+  await installStateFixture(page, () => {
+    polls += 1;
+    const state = report(polls > 1 ? 'Build dashboard updated' : 'Build dashboard');
+    state.instances[0].sessions.push(
+      { id: 'deep-agent', parentID: 'child-alpha', title: 'Deep agent', status: 'waiting', directory: '/work/alpha/app', activity: 'Needs approval' },
+      { id: 'orphan-agent', parentID: 'missing-parent', title: 'Orphan agent', status: 'busy', directory: '/work/alpha/app', activity: 'Working' },
+      { id: 'cycle-a', parentID: 'cycle-b', title: 'Cycle A', status: 'busy', directory: '/work/alpha/app', activity: 'Working' },
+      { id: 'cycle-b', parentID: 'cycle-a', title: 'Cycle B', status: 'busy', directory: '/work/alpha/app', activity: 'Working' },
+    );
+    return state;
+  });
+  await page.goto('/');
+  const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
+  await expect(root).toBeVisible();
+  await expect(root.locator(':scope > summary')).toContainText('Attention in this branch');
+  await root.locator(':scope > summary').focus();
+  await page.keyboard.press('Enter');
+  const child = page.locator('details[data-agent-key="instance-alpha:child-alpha"]');
+  await child.locator(':scope > summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Deep agent', { exact: true })).toBeVisible();
+  await expect(page.getByText('Orphan agent', { exact: true })).toBeVisible();
+  const cycle = page.locator('details[data-agent-key="instance-alpha:cycle-a"]');
+  await expect(cycle.locator(':scope > summary')).toContainText('Cycle A');
+  await cycle.locator(':scope > summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Cycle B', { exact: true })).toBeVisible();
+  await expect(page.locator('.tree-title').filter({ hasText: 'Build dashboard updated' })).toBeVisible();
+  await expect(root).toHaveAttribute('open', '');
+  await expect(child).toHaveAttribute('open', '');
 });
