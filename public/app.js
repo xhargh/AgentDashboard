@@ -17,55 +17,55 @@ function render() {
   $('host').value = selected;
   const query = $('search').value.toLowerCase();
   const fleet = $('fleet'); fleet.replaceChildren();
-  let hiddenOffline = 0;
+  const groups = [
+    ['needs-attention', 'Needs attention', 'Permission requests and errors', []],
+    ['working', 'Working', 'Currently active sessions', []],
+    ['waiting-for-input', 'Waiting for input', 'Idle main agents ready for your next message', []],
+    ['recently-finished', 'Recently finished', 'Completed subagents available if recalled', []],
+    ['offline', 'Offline', 'Instances no longer reporting', []],
+  ];
   for (const i of instances.filter(i => !selected || i.host === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
-    if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
-    const hiddenFinished = $('hide-finished').checked ? i.sessions.filter(s => isFinishedSubagentHidden(s)).length : 0;
-    const visible = i.sessions.filter(s => {
+    for (const s of i.sessions) {
       const classification = classificationsFor(i).get(s.id);
-      return (!$('hide-finished').checked || !isFinishedSubagentHidden(s)) &&
-        (!$('hide-waiting').checked || !i.online || s.parentID || classification.category !== 'waiting' || classification.childAttentionCount > 0) &&
-        (!$('active').checked || (i.online && isActiveCategory(classification))) &&
-        `${i.host} ${i.directory} ${s.title} ${s.directory} ${s.activity} ${s.agent}`.toLowerCase().includes(query);
-    });
-    if (!visible.length && ($('active').checked || query && !`${i.host} ${i.directory}`.toLowerCase().includes(query))) continue;
-    const card = el('article', undefined, 'instance');
-    const head = el('div', undefined, 'instance-head'), title = el('div');
-    title.append(el('h3', i.directory.split('/').filter(Boolean).at(-1) || i.directory), el('code', i.directory));
-    const meta = el('div', undefined, 'machine'); meta.append(el('strong', i.host), el('span', `${i.online ? '● Online' : '○ Offline'} · PID ${i.pid} · ${Math.max(0, Math.floor((Date.now() - i.lastSeen) / 1000))}s ago`, i.online ? 'online' : 'muted'));
-    head.append(title, meta); card.append(head);
-    for (const s of visible.sort((a, b) => (a.parentID || a.id).localeCompare(b.parentID || b.id) || Number(!!a.parentID) - Number(!!b.parentID))) {
-      const classification = classificationsFor(i).get(s.id);
-      const display = sessionState(s, i.online, classification);
-      const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
-      info.append(el('strong', `${s.parentID ? '↳ ' : ''}${s.title}`), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
-      if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
-      if (classification.childAttentionCount) {
-        const count = classification.childAttentionCount;
-        info.append(el('p', `${count} child session${count === 1 ? '' : 's'} need attention`, 'attention-summary'));
-      }
-      if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
-      const state = el('div', undefined, 'session-state'), badge = el('span', display.label, `badge ${display.className}`);
-      badge.title = display.detail;
-      state.append(badge, el('small', s.agent || (s.parentID ? 'subagent' : 'agent')));
-      row.append(info, state); card.append(row);
+      if ($('hide-offline').checked && !i.online) continue;
+      if ($('hide-finished').checked && isFinishedSubagentHidden(s)) continue;
+      if ($('hide-waiting').checked && i.online && !s.parentID && classification.category === 'waiting-for-input' && !classification.childAttentionCount) continue;
+      if ($('active').checked && (!i.online || !isActiveCategory(classification))) continue;
+      const context = `${i.host} ${i.directory} ${s.title} ${s.directory} ${s.activity} ${s.agent}`;
+      if (!context.toLowerCase().includes(query)) continue;
+      const group = groups.find(([category]) => category === classification.category);
+      group?.[3].push({ i, s, classification });
     }
-    if (hiddenFinished) card.append(el('p', `${hiddenFinished} finished subagent${hiddenFinished === 1 ? '' : 's'} hidden`, 'empty'));
-    if (!visible.length && !hiddenFinished) card.append(el('p', i.sessions.length ? 'No sessions match the current filters.' : i.online ? 'Connected. Waiting for session activity.' : 'Offline. No session activity recorded.', 'empty'));
-    if (i.git?.root) {
-      const details = el('details'); details.dataset.instance = i.instanceId; const summary = el('summary', 'Git workspace'); details.append(summary);
-      const grid = el('div', undefined, 'git-grid');
-      for (const [key, label] of [['status', 'Status'], ['log', 'Recent commits'], ['worktrees', 'Worktrees']]) {
-        const block = el('section'); block.append(el('h4', label), el('pre', typeof i.git[key] === 'string' ? i.git[key] || 'Clean / empty' : 'Waiting for Git snapshot')); grid.append(block);
-      }
-      details.append(grid); card.append(details);
-    }
-    fleet.append(card);
   }
-  if (!fleet.children.length) {
+  for (const [id, heading, description, items] of groups) {
+    if (!items.length && id !== 'needs-attention') continue;
+    const section = el('section', undefined, `session-group group-${id}`);
+    const title = el('div', undefined, 'group-heading');
+    const h = el('h2', `${heading} · ${items.length}`); h.id = `group-${id}-heading`;
+    title.append(h, el('p', description, 'muted')); section.append(title);
+    if (!items.length) section.append(el('p', 'Nothing needs your attention right now.', 'empty'));
+    for (const { i, s, classification } of items) {
+      const display = sessionState(s, i.online, classification), card = el('article', undefined, 'session-card');
+      const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
+      info.append(el('strong', `${s.parentID ? '↳ ' : ''}${s.title}`), el('p', `${i.host} · ${i.directory}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
+      if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
+      if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} child session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
+      if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
+      const state = el('div', undefined, 'session-state'), badge = el('span', display.label, `badge ${display.className}`); badge.title = display.detail;
+      state.append(badge, el('small', s.agent || (s.parentID ? 'subagent' : 'agent'))); row.append(info, state); card.append(row);
+      if (i.git?.root && !s.parentID) {
+        const details = el('details'); details.dataset.instance = i.instanceId; details.append(el('summary', 'Git workspace'));
+        const grid = el('div', undefined, 'git-grid');
+        for (const [key, label] of [['status', 'Status'], ['log', 'Recent commits'], ['worktrees', 'Worktrees']]) { const block = el('section'); block.append(el('h4', label), el('pre', typeof i.git[key] === 'string' ? i.git[key] || 'Clean / empty' : 'Waiting for Git snapshot')); grid.append(block); }
+        details.append(grid); card.append(details);
+      }
+      section.append(card);
+    }
+    fleet.append(section);
+  }
+  if (groups.every(([, , , items]) => !items.length)) {
     const empty = el('div', undefined, 'empty');
-    const hidden = hiddenOffline ? `${hiddenOffline} offline instance${hiddenOffline === 1 ? '' : 's'} hidden. ` : '';
-    empty.append(el('h3', instances.length ? 'No matching agents' : 'Ready for your first agent'), el('p', instances.length ? `${hidden}Adjust the filters to see more activity.` : 'Install the plugin and start OpenCode. For other computers, configure the companion URL and token.'));
+    empty.append(el('h3', instances.length ? 'No sessions match the current filters' : 'Ready for your first agent'), el('p', instances.length ? 'Adjust the filters to see more activity.' : 'Install the plugin and start OpenCode. For other computers, configure the companion URL and token.'));
     fleet.append(empty);
   }
 }

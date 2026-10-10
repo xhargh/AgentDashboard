@@ -35,6 +35,15 @@ function report(title = 'Build dashboard', status = 'busy') {
             agent: 'review',
             todos: [],
           },
+          {
+            id: 'permission-alpha',
+            title: 'Approve deployment',
+            status: 'waiting',
+            directory: '/work/alpha/app',
+            activity: 'Waiting for permission',
+            agent: 'build',
+            todos: [],
+          },
         ],
         git: { root: '/work/alpha/app', status: 'clean', log: 'abc123 Initial commit', worktrees: '' },
       },
@@ -80,6 +89,11 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
 
   await expect(page.getByText('● Connected · local only')).toBeVisible();
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Needs attention · 1' })).toBeVisible();
+  await expect(page.getByText('Approve deployment', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Working · 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Waiting for input · 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Recently finished · 1' })).toHaveCount(0);
   await expect(page.getByText('Finished review')).toHaveCount(0);
 
   await page.getByText('Filter agents').click();
@@ -90,6 +104,7 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await page.getByLabel('Computer').selectOption('');
   await page.getByLabel('Search').fill('Editing app.js');
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
+  await expect(page.getByText('Approve deployment', { exact: true })).toHaveCount(0);
   await expect(page.getByText('Fix API', { exact: true })).toHaveCount(0);
 
   await page.getByLabel('Search').fill('');
