@@ -70,7 +70,17 @@ Replace `192.168.1.10` with the companion machine's address. Open that address i
 
 In network mode, all API requests require the shared bearer token, including dashboard reads. The browser keeps it only in memory. Plain HTTP exposes the token and telemetry to network observers: use it on a trusted LAN, or place the companion behind an HTTPS reverse proxy / encrypted private network. TLS terminates at your proxy; point plugins and the browser to its HTTPS URL. Do not publish the plain HTTP service to the internet. Token rotation requires updating the companion and restarting configured OpenCode instances.
 
-Telemetry includes paths, session/task titles, tool titles, Git filenames and commit subjects. It excludes prompts, assistant text, reasoning, raw tool arguments, and tool output. Tool/session titles can still contain sensitive information. Git is inspected on the monitored machine with bounded, read-only subprocesses, never through remotely supplied shell commands.
+The report sent to `/api/report` contains an instance UUID, stable machine UUID, host label, process ID, and a session list. Every session includes its ID and status, plus its parent session ID when present. By default it also contains session titles (`titles`), todo text/status (`tasks`), tool/agent activity (`toolActivity`), session/project/worktree paths (`paths`), and a Git snapshot (`git`) with repository root, short status, recent commit subjects/dates, and worktree details. Git inspection uses bounded, read-only local subprocesses; no remotely supplied shell commands are run. Reports never include conversation prompts, assistant messages or model reasoning, raw tool arguments, or tool outputs. Titles, todo text, activity strings, Git subjects/status, and paths may themselves reveal sensitive information.
+
+Configure plugin privacy with `OPENCODE_SUPERVISOR_TELEMETRY`, a JSON object set in the OpenCode process environment. For example:
+
+```bash
+export OPENCODE_SUPERVISOR_TELEMETRY='{"titles":false,"tasks":false,"toolActivity":false,"paths":false,"git":false}'
+```
+
+The available categories are `titles`, `tasks`, `toolActivity`, `paths`, and `git`; each defaults to `true`. Setting a category to `false` removes that category from the JSON report before `fetch` is called. Git snapshots include paths (repository roots, filenames, and worktree locations), so setting `paths` to `false` also disables `git`. The status-only profile is `{"profile":"status-only"}` and disables all five categories while retaining host/machine/instance identity, process ID, session IDs, parent relationships, and session statuses. Configuration must be valid JSON with known boolean categories; invalid settings disable reporting and produce a local diagnostic. Older reports remain accepted, including reports without optional session metadata or Git snapshots.
+
+Privacy filtering limits report contents, but does not encrypt a connection. Network mode over plain HTTP exposes both the bearer token and report data to network observers; use HTTPS (for example, a reverse proxy with TLS) or an encrypted private network, and restrict access to a trusted/private network. The default local mode sends only to loopback and requires no token. Avoid exposing the plain HTTP companion directly to the internet.
 
 ## Run as a Linux user service
 
@@ -105,6 +115,7 @@ For token-free local access, leave `SUPERVISOR_TOKEN` empty or omit it from the 
 | OpenCode | `OPENCODE_SUPERVISOR_TOKEN` | Absent: local reports only. Required for a network companion |
 | OpenCode | `OPENCODE_SUPERVISOR_URL` | `http://127.0.0.1:4317` |
 | OpenCode | `OPENCODE_SUPERVISOR_HOST` | OS hostname |
+| OpenCode | `OPENCODE_SUPERVISOR_TELEMETRY` | All metadata categories enabled; accepts category booleans or `{"profile":"status-only"}` |
 
 The plugin creates a stable machine ID in `$XDG_CONFIG_HOME/opencode-supervisor/machine-id` (or `~/.config/opencode-supervisor/machine-id` when `XDG_CONFIG_HOME` is unset). Each plugin process generation also gets a fresh instance ID. Display hostnames remain configurable and are not used as machine identity. Failed reports retry with exponential jitter from 0.5–60 seconds, without overlapping requests; successful reports reset the delay. Failure diagnostics are secret-free and limited to one per 30 seconds. Authentication/report-configuration errors are labeled separately from server, network, and timeout failures.
 

@@ -7,6 +7,40 @@ import { promisify } from 'node:util';
 import { createSession, markActivity, markState } from './session-lifecycle.js';
 const exec = promisify(execFile);
 
+const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git'];
+function telemetryConfig(value = process.env.OPENCODE_SUPERVISOR_TELEMETRY) {
+  if (value === undefined || value === '') return Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, true]));
+  let config;
+  try { config = JSON.parse(value); } catch { throw new Error('OPENCODE_SUPERVISOR_TELEMETRY must be valid JSON'); }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('OPENCODE_SUPERVISOR_TELEMETRY must be an object');
+  if (config.profile !== undefined && config.profile !== 'status-only') throw new Error('Unknown telemetry profile');
+  for (const key of Object.keys(config)) {
+    if (key !== 'profile' && !TELEMETRY_CATEGORIES.includes(key)) throw new Error(`Unknown telemetry category: ${key}`);
+    if (key !== 'profile' && typeof config[key] !== 'boolean') throw new Error(`Telemetry category ${key} must be boolean`);
+  }
+  const categories = config.profile === 'status-only'
+    ? Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, false]))
+    : Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, config[category] ?? true]));
+  // Git snapshots contain paths (root, filenames, and worktree locations).
+  if (!categories.paths) categories.git = false;
+  return categories;
+}
+function privateReport({ instanceId, machineId, host, pid, directory, worktree, sessions, git }, privacy) {
+  const report = { instanceId, machineId, host, pid, sessions: sessions.map(session => {
+    const result = { id: session.id, status: session.status };
+    if (session.parentID) result.parentID = session.parentID;
+    if (privacy.titles && session.title) result.title = session.title;
+    if (privacy.paths && session.directory) result.directory = session.directory;
+    if (privacy.toolActivity && session.activity) result.activity = session.activity;
+    if (privacy.toolActivity && session.agent) result.agent = session.agent;
+    if (privacy.tasks && session.todos) result.todos = session.todos;
+    return result;
+  }) };
+  if (privacy.paths) { report.directory = directory; report.worktree = worktree; }
+  if (privacy.git) report.git = git;
+  return report;
+}
+
 async function git(cwd, args) {
   const { stdout } = await exec('git', ['--no-optional-locks', '-C', cwd, ...args], {
     timeout: 4000, maxBuffer: 256 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
@@ -73,6 +107,8 @@ export function retryDelay(failures, random = Math.random) {
 }
 
 export const SupervisorPlugin = async ({ directory, worktree, client }) => {
+  let privacy;
+  try { privacy = telemetryConfig(); } catch (error) { console.warn(`[OpenCode Supervisor] ${error.message}`); return {}; }
   let endpoint;
   try { endpoint = new URL(process.env.OPENCODE_SUPERVISOR_URL || 'http://127.0.0.1:4317'); } catch { return {}; }
   const token = process.env.OPENCODE_SUPERVISOR_TOKEN;
@@ -107,11 +143,11 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
     sending = true;
     let succeeded = false;
     try {
-      if (Date.now() - lastGit > 10000) { gitInfo = await inspectGit(directory); lastGit = Date.now(); }
+      if (privacy.git && Date.now() - lastGit > 10000) { gitInfo = await inspectGit(directory); lastGit = Date.now(); }
       const response = await fetch(new URL('/api/report', endpoint), {
         method: 'POST', redirect: 'error', headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'content-type': 'application/json' },
-        body: JSON.stringify({ instanceId, machineId: machine, host: process.env.OPENCODE_SUPERVISOR_HOST || hostname(), pid: process.pid,
-          directory, worktree, sessions: [...sessions.values()], git: gitInfo }), signal: AbortSignal.timeout(3000),
+        body: JSON.stringify(privateReport({ instanceId, machineId: machine, host: process.env.OPENCODE_SUPERVISOR_HOST || hostname(), pid: process.pid,
+          directory, worktree, sessions: [...sessions.values()], git: gitInfo }, privacy)), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {
         noteFailure(reportFailure(response));

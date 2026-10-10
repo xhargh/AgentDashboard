@@ -5,7 +5,7 @@ const active = s => ['busy', 'retry', 'waiting'].includes(s.status);
 const machineKey = i => i.machineId || `legacy:${i.host}`;
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 function render() {
-  const online = instances.filter(i => i.online), sessions = online.flatMap(i => i.sessions);
+  const online = instances.filter(i => i.online), sessions = online.flatMap(i => i.sessions || []);
   $('metrics').replaceChildren(...[
     ['Computers online', new Set(online.map(machineKey)).size], ['OpenCode instances', online.length],
     ['Active agents', sessions.filter(s => !s.parentID && active(s)).length], ['Active subagents', sessions.filter(s => s.parentID && active(s)).length],
@@ -20,23 +20,26 @@ function render() {
   let hiddenOffline = 0;
   for (const i of instances.filter(i => !selected || machineKey(i) === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
     if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
-    const hiddenFinished = $('hide-finished').checked ? i.sessions.filter(s => s.parentID && s.status === 'idle').length : 0;
-    const visible = i.sessions.filter(s => (!$('hide-finished').checked || !s.parentID || s.status !== 'idle') &&
+    const instanceSessions = i.sessions || [];
+    const hiddenFinished = $('hide-finished').checked ? instanceSessions.filter(s => s.parentID && s.status === 'idle').length : 0;
+    const visible = instanceSessions.filter(s => (!$('hide-finished').checked || !s.parentID || s.status !== 'idle') &&
       (!$('hide-waiting').checked || !i.online || s.parentID || s.status !== 'idle') &&
       (!$('active').checked || (i.online && active(s))) &&
-      `${i.host} ${i.directory} ${s.title} ${s.directory} ${s.activity} ${s.agent}`.toLowerCase().includes(query));
-    if (!visible.length && ($('active').checked || query && !`${i.host} ${i.directory}`.toLowerCase().includes(query))) continue;
+      `${i.host} ${i.directory || ''} ${s.title || ''} ${s.directory || ''} ${s.activity || ''} ${s.agent || ''}`.toLowerCase().includes(query));
+    if (!visible.length && ($('active').checked || query && !`${i.host} ${i.directory || ''}`.toLowerCase().includes(query))) continue;
     const card = el('article', undefined, 'instance');
     const head = el('div', undefined, 'instance-head'), title = el('div');
-    title.append(el('h3', i.directory.split('/').filter(Boolean).at(-1) || i.directory), el('code', i.directory));
+    const path = i.directory || 'Path hidden';
+    title.append(el('h3', i.directory ? i.directory.split('/').filter(Boolean).at(-1) || i.directory : 'Monitored instance'), el('code', path));
     const meta = el('div', undefined, 'machine'); meta.append(el('strong', i.host), el('span', `${i.online ? '● Online' : '○ Offline'} · PID ${i.pid} · ${Math.max(0, Math.floor((Date.now() - i.lastSeen) / 1000))}s ago`, i.online ? 'online' : 'muted'));
     head.append(title, meta); card.append(head);
     for (const s of visible.sort((a, b) => (a.parentID || a.id).localeCompare(b.parentID || b.id) || Number(!!a.parentID) - Number(!!b.parentID))) {
       const display = sessionState(s, i.online);
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
-      info.append(el('strong', `${s.parentID ? '↳ ' : ''}${s.title}`), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
-      if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
-      if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
+      info.append(el('strong', `${s.parentID ? '↳ ' : ''}${s.title || 'Session'}`), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Unavailable'}`, 'activity'));
+      if (s.directory) info.append(el('code', s.directory));
+      if (s.parentID) info.append(el('p', `Subagent of ${i.sessions?.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
+      if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content || ''}`)); info.append(todos); }
       const state = el('div', undefined, 'session-state'), badge = el('span', display.label, `badge ${display.className}`);
       badge.title = display.detail;
       state.append(badge, el('small', s.agent || (s.parentID ? 'subagent' : 'agent')));
