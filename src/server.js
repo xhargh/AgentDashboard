@@ -8,19 +8,47 @@ const assets = new Map(await Promise.all(['index.html', 'app.js', 'session-state
   ['/' + (name === 'index.html' ? '' : name), { body: await readFile(new URL('../public/' + name, import.meta.url)),
     type: name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html' }])));
 function equal(a, b) { const x = Buffer.from(a || ''), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); }
+const LIMITS = Object.freeze({ instances: 2000, sessionsPerReport: 1000, sessionsTotal: 20000,
+  eventsPerReport: 200, eventsTotal: 10000, field: 4096, summary: 200, pruneInterval: 60000 });
+function boundedString(value, max = LIMITS.field) { return typeof value === 'string' && value.length <= max; }
 function validReport(v) {
   return v && typeof v.instanceId === 'string' && v.instanceId.length <= 100 &&
-    (v.machineId === undefined || typeof v.machineId === 'string' && v.machineId.length <= 100) &&
-    typeof v.host === 'string' && v.host.length <= 200 && typeof v.directory === 'string' &&
-    Array.isArray(v.sessions) && v.sessions.length <= 1000 && v.sessions.every(s => s && typeof s.id === 'string' &&
-      typeof s.status === 'string' && typeof s.title === 'string' && typeof s.directory === 'string') &&
-    v.git && typeof v.git === 'object' && !Array.isArray(v.git);
+    (v.machineId === undefined || boundedString(v.machineId, 100)) && boundedString(v.host, 200) && boundedString(v.directory) &&
+    Array.isArray(v.sessions) && v.sessions.length <= LIMITS.sessionsPerReport && v.sessions.every(s => s && boundedString(s.id, 200) &&
+      boundedString(s.status, 40) && (s.title === undefined || boundedString(s.title)) && (s.directory === undefined || boundedString(s.directory)) &&
+      (s.activity === undefined || boundedString(s.activity)) && (s.agent === undefined || boundedString(s.agent, 200)) &&
+      (s.parentID === undefined || boundedString(s.parentID, 200)) && (s.todos === undefined || Array.isArray(s.todos) && s.todos.length <= 200 &&
+        s.todos.every(todo => todo && boundedString(todo.content) && boundedString(todo.status, 40)))) &&
+    (v.git === undefined || v.git && typeof v.git === 'object' && !Array.isArray(v.git) &&
+      Object.entries(v.git).every(([key, value]) => boundedString(key, 100) && (typeof value !== 'string' || boundedString(value)))) &&
+    (v.events === undefined || Array.isArray(v.events) && v.events.length <= LIMITS.eventsPerReport && v.events.every(e => e &&
+      boundedString(e.sessionId, 200) && boundedString(e.timestamp, 40) && Number.isFinite(Date.parse(e.timestamp)) &&
+      boundedString(e.kind, 40) && boundedString(e.summary, LIMITS.summary)));
 }
 export function createServer({ token, now = Date.now } = {}) {
   if (token && token.length < 24) throw new Error('SUPERVISOR_TOKEN must contain at least 24 characters');
   const instances = new Map();
   let revision = 0;
-  const prune = () => { for (const [key, v] of instances) if (now() - v.lastSeen > 86400000) { instances.delete(key); revision++; } };
+  let lastPrune = 0;
+  const prune = (force = false) => {
+    const time = now();
+    if (!force && time - lastPrune < LIMITS.pruneInterval) return;
+    lastPrune = time;
+    for (const [key, v] of instances) if (time - v.lastSeen > 86400000) { instances.delete(key); revision++; }
+  };
+  const sessionCount = () => { let count = 0; for (const item of instances.values()) count += item.sessions.length; return count; };
+  const evictForCapacity = incomingId => {
+    while (instances.size >= LIMITS.instances || sessionCount() > LIMITS.sessionsTotal) {
+      const candidates = [...instances.entries()].filter(([id]) => id !== incomingId);
+      candidates.sort((a, b) => {
+        const score = item => item.online && item.sessions.some(s => ['busy', 'retry', 'waiting'].includes(s.status)) ? 2 : item.online ? 1 : 0;
+        return score(a[1]) - score(b[1]) || a[1].lastSeen - b[1].lastSeen;
+      });
+      if (!candidates.length) return false;
+      instances.delete(candidates[0][0]); revision++;
+    }
+    return true;
+  };
   return http.createServer(async (req, res) => {
     const reply = (status, data) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(data)); };
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -57,11 +85,28 @@ export function createServer({ token, now = Date.now } = {}) {
           for await (const chunk of req) { size += chunk.length; if (size > 1024 * 1024) { reply(413, { error: 'Report exceeds 1 MiB' }); return; } chunks.push(chunk); }
           const v = JSON.parse(Buffer.concat(chunks).toString());
           if (!validReport(v)) return reply(400, { error: 'Invalid report' });
-          if (!instances.has(v.instanceId) && instances.size >= 2000) return reply(503, { error: 'Instance limit reached' });
+          if (!instances.has(v.instanceId) && !evictForCapacity(v.instanceId)) return reply(503, { error: 'Instance capacity is occupied by retained active sessions' });
+          const oldCount = instances.has(v.instanceId) ? instances.get(v.instanceId).sessions.length : 0;
+          if (sessionCount() - oldCount + v.sessions.length > LIMITS.sessionsTotal) {
+            while (sessionCount() - oldCount + v.sessions.length > LIMITS.sessionsTotal) {
+              const priority = item => item.online && item.sessions.some(s => ['busy', 'retry', 'waiting'].includes(s.status)) ? 2 : item.online ? 1 : 0;
+              const candidates = [...instances.entries()].filter(([id]) => id !== v.instanceId)
+                .sort((a, b) => priority(a[1]) - priority(b[1]) || a[1].lastSeen - b[1].lastSeen);
+              if (!candidates.length) return reply(503, { error: 'Aggregate session limit reached' });
+              instances.delete(candidates[0][0]); revision++;
+            }
+          }
           const previous = instances.get(v.instanceId);
           const online = previous ? now() - previous.lastSeen < 20000 : false;
           const meaningfulChange = !previous || JSON.stringify({ ...previous, lastSeen: undefined, online: undefined }) !== JSON.stringify(v);
           instances.set(v.instanceId, { ...v, lastSeen: now(), online: true });
+          let eventCount = [...instances.values()].reduce((count, instance) => count + (instance.events?.length || 0), 0);
+          if (eventCount > LIMITS.eventsTotal) {
+            for (const instance of [...instances.values()].sort((a, b) => a.lastSeen - b.lastSeen)) {
+              while (eventCount > LIMITS.eventsTotal && instance.events?.length) { instance.events.shift(); eventCount--; }
+              if (eventCount <= LIMITS.eventsTotal) break;
+            }
+          }
           if (meaningfulChange || !online) revision++;
           return reply(200, { ok: true });
         } catch { return reply(400, { error: 'Invalid JSON report' }); }

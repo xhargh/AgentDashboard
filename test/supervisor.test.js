@@ -48,6 +48,23 @@ test('accepts legacy reports without a machine identity', async t => {
   const state = await (await request('/api/state')).json();
   assert.equal(state.instances[0].machineId, undefined);
 });
+test('bounds aggregate fleet retention, preserves active instances, and caps report strings', async t => {
+  const { request } = await start(t);
+  const send = value => request('/api/report', { method: 'POST', body: JSON.stringify(value) });
+  for (let n = 0; n < 20; n++) {
+    const value = report(`fleet-${n}`);
+    value.sessions = Array.from({ length: 1000 }, (_, index) => ({ id: `${n}-${index}`, status: n === 19 ? 'busy' : 'idle', title: 'ok' }));
+    assert.equal((await send(value)).status, 200);
+  }
+  const active = report('new-active'); active.sessions[0].status = 'waiting';
+  assert.equal((await send(active)).status, 200);
+  const state = await (await request('/api/state')).json();
+  assert.ok(state.instances.reduce((count, instance) => count + instance.sessions.length, 0) <= 20000);
+  assert.ok(state.instances.some(instance => instance.instanceId === 'fleet-19'));
+  assert.ok(state.instances.some(instance => instance.instanceId === 'new-active'));
+  const oversized = report('too-long'); oversized.sessions[0].title = 'x'.repeat(4097);
+  assert.equal((await send(oversized)).status, 400);
+});
 test('state revision changes only for meaningful reports and derived transitions', async t => {
   let time = 1000;
   const { request } = await start(t, { now: () => time });
