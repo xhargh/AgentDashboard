@@ -1,14 +1,17 @@
-import { sessionState } from './session-state.js';
+import { classifySessions, isActiveCategory, isFinishedSubagentHidden, sessionState } from './session-state.js';
 const $ = id => document.getElementById(id);
 let token = '', instances = [], revision = null, pending = false, authRequired = false;
-const active = s => ['busy', 'retry', 'waiting'].includes(s.status);
 const machineKey = i => i.machineId || `legacy:${i.host}`;
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 function render() {
-  const online = instances.filter(i => i.online), sessions = online.flatMap(i => i.sessions || []);
+  const online = instances.filter(i => i.online);
+  const sessionClassifications = new Map(instances.map(i => [i.instanceId, classifySessions(i.sessions, i.online)]));
+  const classificationsFor = i => sessionClassifications.get(i.instanceId);
+  const sessions = online.flatMap(i => i.sessions.map(s => ({ session: s, classification: classificationsFor(i).get(s.id) })));
   $('metrics').replaceChildren(...[
     ['Computers online', new Set(online.map(machineKey)).size], ['OpenCode instances', online.length],
-    ['Active agents', sessions.filter(s => !s.parentID && active(s)).length], ['Active subagents', sessions.filter(s => s.parentID && active(s)).length],
+    ['Active agents', sessions.filter(({ session, classification }) => !session.parentID && isActiveCategory(classification)).length],
+    ['Active subagents', sessions.filter(({ session, classification }) => session.parentID && isActiveCategory(classification)).length],
   ].map(([label, value]) => { const n = el('article', undefined, 'metric'); n.append(el('span', label), el('strong', value)); return n; }));
   const selected = $('host').value;
   const machines = new Map(instances.map(i => [machineKey(i), i]));
@@ -20,12 +23,14 @@ function render() {
   let hiddenOffline = 0;
   for (const i of instances.filter(i => !selected || machineKey(i) === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
     if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
-    const instanceSessions = i.sessions || [];
-    const hiddenFinished = $('hide-finished').checked ? instanceSessions.filter(s => s.parentID && s.status === 'idle').length : 0;
-    const visible = instanceSessions.filter(s => (!$('hide-finished').checked || !s.parentID || s.status !== 'idle') &&
-      (!$('hide-waiting').checked || !i.online || s.parentID || s.status !== 'idle') &&
-      (!$('active').checked || (i.online && active(s))) &&
-      `${i.host} ${i.directory || ''} ${s.title || ''} ${s.directory || ''} ${s.activity || ''} ${s.agent || ''}`.toLowerCase().includes(query));
+    const hiddenFinished = $('hide-finished').checked ? i.sessions.filter(s => isFinishedSubagentHidden(s)).length : 0;
+    const visible = i.sessions.filter(s => {
+      const classification = classificationsFor(i).get(s.id);
+      return (!$('hide-finished').checked || !isFinishedSubagentHidden(s)) &&
+        (!$('hide-waiting').checked || !i.online || s.parentID || classification.category !== 'waiting' || classification.childAttentionCount > 0) &&
+        (!$('active').checked || (i.online && isActiveCategory(classification))) &&
+        `${i.host} ${i.directory || ''} ${s.title || ''} ${s.directory || ''} ${s.activity || ''} ${s.agent || ''}`.toLowerCase().includes(query);
+    });
     if (!visible.length && ($('active').checked || query && !`${i.host} ${i.directory || ''}`.toLowerCase().includes(query))) continue;
     const card = el('article', undefined, 'instance');
     const head = el('div', undefined, 'instance-head'), title = el('div');
@@ -35,11 +40,16 @@ function render() {
     const meta = el('div', undefined, 'machine'); meta.append(el('strong', i.host), el('span', `${state} · PID ${i.pid ?? 'unknown'} · ${Math.max(0, Math.floor((Date.now() - i.lastSeen) / 1000))}s ago`, i.online ? 'online' : 'muted'));
     head.append(title, meta); card.append(head);
     for (const s of visible.sort((a, b) => (a.parentID || a.id).localeCompare(b.parentID || b.id) || Number(!!a.parentID) - Number(!!b.parentID))) {
-      const display = sessionState(s, i.online);
+      const classification = classificationsFor(i).get(s.id);
+      const display = sessionState(s, i.online, classification);
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
       info.append(el('strong', `${s.parentID ? '↳ ' : ''}${s.title || 'Session'}`), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Unavailable'}`, 'activity'));
       if (s.directory) info.append(el('code', s.directory));
       if (s.parentID) info.append(el('p', `Subagent of ${i.sessions?.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
+      if (classification.childAttentionCount) {
+        const count = classification.childAttentionCount;
+        info.append(el('p', `${count} child session${count === 1 ? '' : 's'} need attention`, 'attention-summary'));
+      }
       if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content || ''}`)); info.append(todos); }
       const state = el('div', undefined, 'session-state'), badge = el('span', display.label, `badge ${display.className}`);
       badge.title = display.detail;
