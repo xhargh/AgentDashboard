@@ -1,4 +1,4 @@
-import { sessionState } from './session-state.js';
+import { isFinishedSubagentHidden, sessionState } from './session-state.js';
 const $ = id => document.getElementById(id);
 let token = '', instances = [], revision = null, pending = false, authRequired = false;
 const active = s => ['busy', 'retry', 'waiting'].includes(s.status);
@@ -21,8 +21,8 @@ function render() {
   for (const i of instances.filter(i => !selected || machineKey(i) === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
     if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
     const instanceSessions = i.sessions || [];
-    const hiddenFinished = $('hide-finished').checked ? instanceSessions.filter(s => s.parentID && s.status === 'idle').length : 0;
-    const visible = instanceSessions.filter(s => (!$('hide-finished').checked || !s.parentID || s.status !== 'idle') &&
+    const hiddenFinished = $('hide-finished').checked ? instanceSessions.filter(s => isFinishedSubagentHidden(s)).length : 0;
+    const visible = instanceSessions.filter(s => (!$('hide-finished').checked || !isFinishedSubagentHidden(s)) &&
       (!$('hide-waiting').checked || !i.online || s.parentID || s.status !== 'idle') &&
       (!$('active').checked || (i.online && active(s))) &&
       `${i.host} ${i.directory || ''} ${s.title || ''} ${s.directory || ''} ${s.activity || ''} ${s.agent || ''}`.toLowerCase().includes(query));
@@ -46,7 +46,7 @@ function render() {
       row.append(info, state); card.append(row);
     }
     if (hiddenFinished) card.append(el('p', `${hiddenFinished} finished subagent${hiddenFinished === 1 ? '' : 's'} hidden`, 'empty'));
-    if (!visible.length && !hiddenFinished) card.append(el('p', i.sessions.length ? 'No sessions match the current filters.' : i.online ? 'Connected. Waiting for session activity.' : 'Offline. No session activity recorded.', 'empty'));
+    if (!visible.length && !hiddenFinished) card.append(el('p', instanceSessions.length ? 'No sessions match the current filters.' : i.online ? 'Connected. Waiting for session activity.' : 'Offline. No session activity recorded.', 'empty'));
     if (i.git?.root) {
       const details = el('details'); details.dataset.instance = i.instanceId; const summary = el('summary', 'Git workspace'); details.append(summary);
       const grid = el('div', undefined, 'git-grid');
