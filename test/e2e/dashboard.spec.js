@@ -259,3 +259,53 @@ test('shows a compact empty activity state for agents without event history', as
   await timeline.locator('summary').click();
   await expect(timeline).toContainText('No recent activity reported.');
 });
+
+test('attention notifications are opt-in, fire once on live transitions, and tab count is optional', async ({ page }) => {
+  let polls = 0;
+  await page.addInitScript(() => {
+    window.notificationCalls = [];
+    window.Notification = class {
+      static permission = 'granted';
+      static requestPermission() { window.permissionRequests = (window.permissionRequests || 0) + 1; return Promise.resolve('granted'); }
+      constructor(title, options) { window.notificationCalls.push({ title, options }); }
+    };
+  });
+  await installStateFixture(page, () => {
+    polls++;
+    const state = report();
+    const session = state.instances[0].sessions.find(item => item.id === 'root-alpha');
+    session.status = polls < 3 ? 'busy' : 'waiting';
+    session.stateChangedAt = polls < 3 ? '2026-01-01T00:00:00.000Z' : '2026-01-01T00:00:02.000Z';
+    return state;
+  });
+  await page.goto('/');
+  await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.notificationCalls.length)).toBe(0);
+  await page.locator('#notifications').check();
+  await expect.poll(() => page.evaluate(() => window.notificationCalls.length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.notificationCalls.length)).toBe(1);
+  await expect(page.evaluate(() => window.permissionRequests || 0)).resolves.toBe(0);
+  await page.locator('#tab-count').check();
+  await expect(page).toHaveTitle('(2) OpenCode Supervisor');
+  await page.locator('#tab-count').uncheck();
+  await expect(page).toHaveTitle('OpenCode Supervisor');
+  await page.locator('#notifications').uncheck();
+});
+
+test('existing attention states do not notify on initial load or after reconnect', async ({ page }) => {
+  let polls = 0;
+  await page.addInitScript(() => {
+    window.notificationCalls = [];
+    window.Notification = class { static permission = 'granted'; constructor(title) { window.notificationCalls.push(title); } };
+  });
+  await installStateFixture(page, () => {
+    polls++;
+    const state = report();
+    state.instances[0].sessions[0].status = 'error';
+    if (polls === 2) return { status: 503, body: { error: 'offline' } };
+    return state;
+  });
+  await page.goto('/');
+  await page.locator('#notifications').check();
+  await expect.poll(() => page.evaluate(() => window.notificationCalls.length)).toBe(0);
+});
