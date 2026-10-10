@@ -48,6 +48,23 @@ test('accepts legacy reports without a machine identity', async t => {
   const state = await (await request('/api/state')).json();
   assert.equal(state.instances[0].machineId, undefined);
 });
+test('bounds aggregate fleet retention, preserves active instances, and caps report strings', async t => {
+  const { request } = await start(t);
+  const send = value => request('/api/report', { method: 'POST', body: JSON.stringify(value) });
+  for (let n = 0; n < 20; n++) {
+    const value = report(`fleet-${n}`);
+    value.sessions = Array.from({ length: 1000 }, (_, index) => ({ id: `${n}-${index}`, status: n === 19 ? 'busy' : 'idle', title: 'ok' }));
+    assert.equal((await send(value)).status, 200);
+  }
+  const active = report('new-active'); active.sessions[0].status = 'waiting';
+  assert.equal((await send(active)).status, 200);
+  const state = await (await request('/api/state')).json();
+  assert.ok(state.instances.reduce((count, instance) => count + instance.sessions.length, 0) <= 20000);
+  assert.ok(state.instances.some(instance => instance.instanceId === 'fleet-19'));
+  assert.ok(state.instances.some(instance => instance.instanceId === 'new-active'));
+  const oversized = report('too-long'); oversized.sessions[0].title = 'x'.repeat(4097);
+  assert.equal((await send(oversized)).status, 400);
+});
 test('accepts reports with privacy-filtered optional metadata', async t => {
   const { request } = await start(t);
   const minimal = { instanceId: 'private', machineId: 'machine', host: 'alpha', pid: 1,
@@ -57,6 +74,67 @@ test('accepts reports with privacy-filtered optional metadata', async t => {
   assert.equal(state.instances[0].sessions[0].status, 'busy');
   assert.equal(state.instances[0].sessions[0].title, undefined);
   assert.equal(state.instances[0].git, undefined);
+});
+test('reconciles same-process generations without merging concurrent instances', async t => {
+  let time = 1000;
+  const { request } = await start(t, { now: () => time });
+  const send = value => request('/api/report', { method: 'POST', body: JSON.stringify(value) });
+  const generation = (instanceId, pid, status = 'busy', generationStartedAt = time) => ({
+    instanceId, machineId: 'machine-a', host: 'same-host', pid, generationStartedAt,
+    directory: '/work/project', sessions: [{ id: `session-${instanceId}`, title: instanceId, directory: '/work/project', status }], git: {},
+  });
+
+  await send(generation('old-generation', 41, 'busy', 900));
+  time += 5000;
+  await send(generation('concurrent-process', 42));
+  time += 5000;
+  await send(generation('replacement', 41, 'idle', 10900));
+
+  let instances = (await (await request('/api/state')).json()).instances;
+  const old = instances.find(instance => instance.instanceId === 'old-generation');
+  assert.equal(old.online, false);
+  assert.equal(old.replaced, true);
+  assert.equal(old.replacedBy, 'replacement');
+  assert.equal(instances.find(instance => instance.instanceId === 'replacement').online, true);
+  assert.equal(instances.find(instance => instance.instanceId === 'concurrent-process').online, true);
+  assert.equal(instances.length, 3);
+  const revision = (await (await request('/api/state')).json()).revision;
+
+  await send(generation('old-generation', 41, 'busy', 900));
+  const state = await (await request('/api/state')).json();
+  instances = state.instances;
+  assert.equal(instances.find(instance => instance.instanceId === 'old-generation').online, false);
+  assert.equal(instances.find(instance => instance.instanceId === 'replacement').online, true,
+    'a delayed heartbeat from an older generation cannot replace its successor');
+  assert.equal(state.revision, revision, 'stale generation heartbeats do not churn state revisions');
+
+  time += 86400001;
+  instances = (await (await request('/api/state')).json()).instances;
+  assert.equal(instances.length, 0, 'replaced generations retain the existing 24-hour expiry');
+});
+test('offline instances recover under the same generation and remain distinct from replaced ones', async t => {
+  let time = 1000;
+  const { request } = await start(t, { now: () => time });
+  const send = (instanceId, generationStartedAt) => request('/api/report', { method: 'POST', body: JSON.stringify({
+    instanceId, machineId: 'machine-a', host: 'alpha', pid: 41, generationStartedAt,
+    sessions: [{ id: 'session', status: 'busy' }],
+  }) });
+
+  await send('generation-one', 900);
+  time += 20000;
+  let instances = (await (await request('/api/state')).json()).instances;
+  assert.equal(instances[0].online, false);
+  assert.equal(instances[0].replaced, undefined);
+
+  await send('generation-one', 900);
+  instances = (await (await request('/api/state')).json()).instances;
+  assert.equal(instances.find(instance => instance.instanceId === 'generation-one').online, true);
+
+  await send('generation-two', 21000);
+  instances = (await (await request('/api/state')).json()).instances;
+  assert.equal(instances.find(instance => instance.instanceId === 'generation-one').online, false);
+  assert.equal(instances.find(instance => instance.instanceId === 'generation-one').replaced, true);
+  assert.equal(instances.find(instance => instance.instanceId === 'generation-two').online, true);
 });
 test('state revision changes only for meaningful reports and derived transitions', async t => {
   let time = 1000;
@@ -219,6 +297,72 @@ test('status-only telemetry strips metadata before transmission and validates se
     process.env.OPENCODE_SUPERVISOR_TELEMETRY = '{"unknown":false}';
     return SupervisorPlugin({ directory: '/tmp' });
   })(), {});
+});
+test('each telemetry privacy category is filtered from the outgoing report payload', async t => {
+  const originalFetch = globalThis.fetch;
+  const keys = ['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_TELEMETRY', 'XDG_CONFIG_HOME'];
+  const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const root = await mkdtemp(join(tmpdir(), 'supervisor-privacy-categories-'));
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(root, { recursive: true, force: true });
+  });
+  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
+  process.env.OPENCODE_SUPERVISOR_TOKEN = token;
+  process.env.XDG_CONFIG_HOME = root;
+  const git = (...args) => promisify(execFile)('git', ['-C', root, ...args]);
+  await git('init');
+  await git('config', 'user.name', 'Privacy test');
+  await git('config', 'user.email', 'privacy@example.test');
+  await writeFile(join(root, 'private-file'), 'fixture');
+  await git('add', '.');
+  await git('commit', '-m', 'PRIVATE_COMMIT');
+
+  for (const [category, forbidden] of [
+    ['titles', 'PRIVATE_TITLE'], ['tasks', 'PRIVATE_TASK'], ['toolActivity', 'PRIVATE_ACTIVITY'],
+    ['paths', root], ['git', 'PRIVATE_COMMIT'],
+  ]) {
+    process.env.OPENCODE_SUPERVISOR_TELEMETRY = JSON.stringify({ [category]: false });
+    const reports = [];
+    globalThis.fetch = async (_url, init) => { reports.push(JSON.parse(init.body)); return new Response('', { status: 200 }); };
+    const directory = root;
+    const plugin = await SupervisorPlugin({ directory, worktree: '/private/worktree', client: {
+      session: {
+        list: async () => ({ data: [{ id: 'session', title: 'PRIVATE_TITLE', directory, parentID: 'parent' }] }),
+        status: async () => ({ data: { session: { type: 'busy' } } }),
+      },
+    } });
+    t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory } } }));
+    await plugin.event({ event: { type: 'session.updated', properties: { info: {
+      id: 'session', title: 'PRIVATE_TITLE', directory,
+      todos: [{ content: 'PRIVATE_TASK', status: 'pending' }],
+    } } } });
+    await plugin.event({ event: { type: 'message.part.updated', properties: {
+      part: { sessionID: 'session', type: 'tool', tool: 'PRIVATE_ACTIVITY', state: { status: 'running', input: { command: 'RAW_TOOL_ARGUMENT' }, output: 'RAW_TOOL_OUTPUT' } },
+    } } });
+    await plugin.event({ event: { type: 'todo.updated', properties: { sessionID: 'session', todos: [{ content: 'PRIVATE_TASK', status: 'pending' }] } } });
+    await plugin.event({ event: { type: 'message.updated', properties: { info: { sessionID: 'session', content: 'RAW_PROMPT and PRIVATE_REASONING' } } } });
+    await new Promise(resolve => setTimeout(resolve, 350));
+    const sent = reports.at(-1);
+    assert.ok(sent, `${category}: report was transmitted`);
+    const payload = JSON.stringify(sent);
+    assert.ok(!payload.includes(forbidden), `${category}: ${forbidden} absent from transmitted report`);
+    assert.ok(!payload.includes('RAW_TOOL_ARGUMENT'));
+    assert.ok(!payload.includes('RAW_TOOL_OUTPUT'));
+    assert.ok(!payload.includes('RAW_PROMPT'));
+    assert.ok(!payload.includes('PRIVATE_REASONING'));
+    assert.equal(sent.sessions[0].id, 'session');
+    assert.equal(sent.sessions[0].status, 'busy');
+    if (category === 'paths') {
+      assert.equal(sent.directory, undefined);
+      assert.equal(sent.worktree, undefined);
+      assert.equal(sent.git, undefined);
+      assert.equal(sent.sessions[0].directory, undefined);
+    }
+    if (category === 'git') assert.equal(sent.git, undefined);
+    await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory } } });
+  }
 });
 test('plugin classifies HTTP, network, and timeout report failures without leaking details', async t => {
   const originalFetch = globalThis.fetch;

@@ -29,6 +29,7 @@ function render() {
     ['offline', 'Offline', 'Instances no longer reporting', []],
   ];
   let hiddenOffline = 0;
+  const notices = [];
   for (const i of instances.filter(i => !selected || machineKey(i) === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
     if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
     const hiddenFinished = $('hide-finished').checked ? i.sessions.filter(s => isFinishedSubagentHidden(s)).length : 0;
@@ -40,6 +41,12 @@ function render() {
         `${i.host} ${i.directory || ''} ${s.title || ''} ${s.directory || ''} ${s.activity || ''} ${s.agent || ''}`.toLowerCase().includes(query);
     });
     if (!visible.length && ($('active').checked || query && !`${i.host} ${i.directory || ''}`.toLowerCase().includes(query))) continue;
+    if (hiddenFinished) notices.push(['recently-finished', `${i.host}: ${hiddenFinished} finished subagent${hiddenFinished === 1 ? '' : 's'} hidden`]);
+    if (!visible.length && !hiddenFinished) {
+      const message = i.sessions.length ? 'No sessions match the current filters.' : i.online ? 'Connected. Waiting for session activity.' : 'Offline. No session activity recorded.';
+      notices.push(['needs-attention', `${i.host}: ${message}`]);
+    }
+    if (!visible.length && !i.sessions.length) groups.find(([category]) => category === (i.online ? 'needs-attention' : 'offline'))[3].push({ i, instanceOnly: true });
     for (const s of visible.sort((a, b) => (a.parentID || a.id).localeCompare(b.parentID || b.id) || Number(!!a.parentID) - Number(!!b.parentID))) {
       const classification = classificationsFor(i).get(s.id);
       const group = groups.find(([category]) => category === classification.category);
@@ -47,16 +54,27 @@ function render() {
     }
   }
   for (const [id, heading, description, items] of groups) {
-    if (!items.length && id !== 'needs-attention') continue;
+    if (!items.length && id !== 'needs-attention' && !notices.some(([group]) => group === id)) continue;
     const section = el('section', undefined, `session-group group-${id}`);
     const title = el('div', undefined, 'group-heading');
     const h = el('h2', `${heading} · ${items.length}`); h.id = `group-${id}-heading`;
     title.append(h, el('p', description, 'muted')); section.append(title);
     if (!items.length) section.append(el('p', 'Nothing needs your attention right now.', 'empty'));
-    for (const { i, s, classification } of items) {
+    for (const [noticeGroup, message] of notices.filter(([group]) => group === id)) section.append(el('p', message, 'empty'));
+    for (const item of items) {
+      const { i, s, classification } = item;
+      if (item.instanceOnly) {
+        const status = i.online ? '● Online' : i.replaced ? '↻ Replaced' : '○ Offline';
+        const age = Math.max(0, Math.floor((Date.now() - i.lastSeen) / 1000));
+        const card = el('article', undefined, 'session-card');
+        card.append(el('p', `${i.host} · ${status} · PID ${i.pid ?? 'unknown'} · ${age}s ago`, i.online ? 'online' : 'muted'));
+        section.append(card);
+        continue;
+      }
       const display = sessionState(s, i.online, classification), card = el('article', undefined, 'session-card');
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
-      info.append(el('strong', `${s.parentID ? '↳ ' : ''}${s.title || 'Session'}`), el('p', `${i.host} · ${i.directory || 'Path hidden'}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Unavailable'}`, 'activity'));
+      const stateLabel = i.online ? '● Online' : i.replaced ? '↻ Replaced' : '○ Offline';
+      info.append(el('strong', `${s.parentID ? '↳ ' : ''}${s.title || 'Session'}`), el('p', `${i.host} · ${i.directory || 'Path hidden'}`, 'muted'), el('p', `${stateLabel} · PID ${i.pid ?? 'unknown'} · ${Math.max(0, Math.floor((Date.now() - i.lastSeen) / 1000))}s ago`, i.online ? 'online' : 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Unavailable'}`, 'activity'));
       if (s.directory) info.append(el('code', s.directory));
       if (s.parentID) info.append(el('p', `Subagent of ${i.sessions?.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
       if (classification.childAttentionCount) {
