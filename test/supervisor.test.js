@@ -58,6 +58,43 @@ test('accepts reports with privacy-filtered optional metadata', async t => {
   assert.equal(state.instances[0].sessions[0].title, undefined);
   assert.equal(state.instances[0].git, undefined);
 });
+test('reconciles same-process generations without merging concurrent instances', async t => {
+  let time = 1000;
+  const { request } = await start(t, { now: () => time });
+  const send = value => request('/api/report', { method: 'POST', body: JSON.stringify(value) });
+  const generation = (instanceId, pid, status = 'busy', generationStartedAt = time) => ({
+    instanceId, machineId: 'machine-a', host: 'same-host', pid, generationStartedAt,
+    directory: '/work/project', sessions: [{ id: `session-${instanceId}`, title: instanceId, directory: '/work/project', status }], git: {},
+  });
+
+  await send(generation('old-generation', 41, 'busy', 900));
+  time += 5000;
+  await send(generation('concurrent-process', 42));
+  time += 5000;
+  await send(generation('replacement', 41, 'idle', 10900));
+
+  let instances = (await (await request('/api/state')).json()).instances;
+  const old = instances.find(instance => instance.instanceId === 'old-generation');
+  assert.equal(old.online, false);
+  assert.equal(old.replaced, true);
+  assert.equal(old.replacedBy, 'replacement');
+  assert.equal(instances.find(instance => instance.instanceId === 'replacement').online, true);
+  assert.equal(instances.find(instance => instance.instanceId === 'concurrent-process').online, true);
+  assert.equal(instances.length, 3);
+  const revision = (await (await request('/api/state')).json()).revision;
+
+  await send(generation('old-generation', 41, 'busy', 900));
+  const state = await (await request('/api/state')).json();
+  instances = state.instances;
+  assert.equal(instances.find(instance => instance.instanceId === 'old-generation').online, false);
+  assert.equal(instances.find(instance => instance.instanceId === 'replacement').online, true,
+    'a delayed heartbeat from an older generation cannot replace its successor');
+  assert.equal(state.revision, revision, 'stale generation heartbeats do not churn state revisions');
+
+  time += 86400001;
+  instances = (await (await request('/api/state')).json()).instances;
+  assert.equal(instances.length, 0, 'replaced generations retain the existing 24-hour expiry');
+});
 test('state revision changes only for meaningful reports and derived transitions', async t => {
   let time = 1000;
   const { request } = await start(t, { now: () => time });

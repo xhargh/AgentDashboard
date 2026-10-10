@@ -31,7 +31,8 @@ function render() {
     const head = el('div', undefined, 'instance-head'), title = el('div');
     const path = i.directory || 'Path hidden';
     title.append(el('h3', i.directory ? i.directory.split('/').filter(Boolean).at(-1) || i.directory : 'Monitored instance'), el('code', path));
-    const meta = el('div', undefined, 'machine'); meta.append(el('strong', i.host), el('span', `${i.online ? '● Online' : '○ Offline'} · PID ${i.pid} · ${Math.max(0, Math.floor((Date.now() - i.lastSeen) / 1000))}s ago`, i.online ? 'online' : 'muted'));
+    const state = i.online ? '● Online' : i.replaced ? '↻ Replaced' : '○ Offline';
+    const meta = el('div', undefined, 'machine'); meta.append(el('strong', i.host), el('span', `${state} · PID ${i.pid ?? 'unknown'} · ${Math.max(0, Math.floor((Date.now() - i.lastSeen) / 1000))}s ago`, i.online ? 'online' : 'muted'));
     head.append(title, meta); card.append(head);
     for (const s of visible.sort((a, b) => (a.parentID || a.id).localeCompare(b.parentID || b.id) || Number(!!a.parentID) - Number(!!b.parentID))) {
       const display = sessionState(s, i.online);

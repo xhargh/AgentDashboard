@@ -11,6 +11,7 @@ function equal(a, b) { const x = Buffer.from(a || ''), y = Buffer.from(b); retur
 function validReport(v) {
   return v && typeof v.instanceId === 'string' && v.instanceId.length <= 100 &&
     (v.machineId === undefined || typeof v.machineId === 'string' && v.machineId.length <= 100) &&
+    (v.generationStartedAt === undefined || Number.isFinite(v.generationStartedAt)) &&
     typeof v.host === 'string' && v.host.length <= 200 && (v.directory === undefined || typeof v.directory === 'string') &&
     Array.isArray(v.sessions) && v.sessions.length <= 1000 && v.sessions.every(s => s && typeof s.id === 'string' &&
       typeof s.status === 'string' && (s.title === undefined || typeof s.title === 'string') &&
@@ -46,7 +47,7 @@ export function createServer({ token, now = Date.now } = {}) {
       if (path === '/api/state' && req.method === 'GET') {
         const time = now();
         for (const instance of instances.values()) {
-          const online = time - instance.lastSeen < 20000;
+          const online = time - instance.lastSeen < 20000 && !instance.replaced;
           if (online !== instance.online) { instance.online = online; revision++; }
         }
         const etag = `"${revision}"`;
@@ -61,11 +62,34 @@ export function createServer({ token, now = Date.now } = {}) {
           const v = JSON.parse(Buffer.concat(chunks).toString());
           if (!validReport(v)) return reply(400, { error: 'Invalid report' });
           if (!instances.has(v.instanceId) && instances.size >= 2000) return reply(503, { error: 'Instance limit reached' });
+          const seenAt = now();
+          // A PID identifies one live process on a machine. A new plugin generation
+          // for that process replaces the old generation; different PIDs remain
+          // independent even when they share a machine and working directory.
+          let supersededBy;
+          if (v.machineId && Number.isInteger(v.pid)) {
+            for (const [id, previous] of instances) {
+              if (id === v.instanceId || previous.machineId !== v.machineId || previous.pid !== v.pid) continue;
+              if (Number.isFinite(previous.generationStartedAt) && Number.isFinite(v.generationStartedAt) &&
+                  previous.generationStartedAt > v.generationStartedAt) {
+                supersededBy = previous.instanceId;
+                continue;
+              }
+              if (!previous.replaced) {
+                previous.online = false;
+                previous.replaced = true;
+                previous.replacedBy = v.instanceId;
+                revision++;
+              }
+            }
+          }
           const previous = instances.get(v.instanceId);
-          const online = previous ? now() - previous.lastSeen < 20000 : false;
-          const meaningfulChange = !previous || JSON.stringify({ ...previous, lastSeen: undefined, online: undefined }) !== JSON.stringify(v);
-          instances.set(v.instanceId, { ...v, lastSeen: now(), online: true });
-          if (meaningfulChange || !online) revision++;
+          const replaced = Boolean(supersededBy || previous?.replaced);
+          const online = previous ? now() - previous.lastSeen < 20000 && !previous.replaced : false;
+          const meaningfulChange = !previous || JSON.stringify({ ...previous, lastSeen: undefined, online: undefined, replaced: undefined, replacedBy: undefined }) !== JSON.stringify(v);
+          instances.set(v.instanceId, { ...v, ...(replaced ? { replaced: true, replacedBy: supersededBy || previous.replacedBy } : {}),
+            lastSeen: replaced && previous ? previous.lastSeen : seenAt, online: !replaced });
+          if (meaningfulChange || !replaced && !online) revision++;
           return reply(200, { ok: true });
         } catch { return reply(400, { error: 'Invalid JSON report' }); }
       }
