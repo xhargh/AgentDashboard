@@ -174,7 +174,9 @@ test('distinguishes replaced instances from instances that are merely offline', 
     { instanceId: 'offline', host: 'beta', pid: 43, online: false, lastSeen: now, sessions: [] },
   ] }));
   await page.goto('/');
+  await page.getByText('Filter agents', { exact: true }).click();
+  await page.locator('#hide-offline').uncheck();
 
-  await expect(page.getByText('↻ Replaced · PID 42 · 0s ago')).toBeVisible();
-  await expect(page.getByText('○ Offline · PID 43 · 0s ago')).toBeVisible();
+  await expect(page.locator('#fleet').getByText(/↻ Replaced · PID 42 · \d+s ago/)).toBeVisible();
+  await expect(page.locator('#fleet').getByText(/○ Offline · PID 43 · \d+s ago/)).toBeVisible();
 });
