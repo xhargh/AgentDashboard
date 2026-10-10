@@ -1,4 +1,4 @@
-import { buildSessionTree, classifySessions, isActiveCategory, isFinishedSubagentHidden, sessionState } from './session-state.js';
+import { buildSessionTree, classifySessions, isActiveCategory, isFinishedSubagentHidden, sessionMatchesSearch, sessionState } from './session-state.js';
 const $ = id => document.getElementById(id);
 let token = '', instances = [], pending = false, authRequired = false;
 const expandedAgents = new Set();
@@ -44,8 +44,7 @@ function render() {
       if ($('hide-finished').checked && isFinishedSubagentHidden(s)) continue;
       if ($('hide-waiting').checked && i.online && !s.parentID && classification.category === 'waiting-for-input' && !classification.childAttentionCount) continue;
       if ($('active').checked && (!i.online || !isActiveCategory(classification))) continue;
-      const context = `${i.host} ${i.directory} ${s.title} ${s.directory} ${s.activity} ${s.agent}`;
-      if (!context.toLowerCase().includes(query)) continue;
+      if (!sessionMatchesSearch(s, query, i.host, i.directory)) continue;
       const group = groups.find(([category]) => category === classification.category);
       if (group) eligible.add(s.id);
     }
@@ -140,7 +139,7 @@ async function poll() {
     authRequired = data.mode !== 'local';
     instances = data.instances; $('login').hidden = true; $('dashboard').hidden = false; $('logout').hidden = !authRequired;
     $('connection').textContent = authRequired ? '● Connected · network mode' : '● Connected · local only'; $('error').textContent = ''; render();
-    document.querySelectorAll('details').forEach(n => n.open = open.has(n.dataset.instance));
+    document.querySelectorAll('details[data-instance]').forEach(n => n.open = open.has(n.dataset.instance));
   } catch (e) { $('connection').textContent = '○ Disconnected · retrying'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
   finally { pending = false; }
 }

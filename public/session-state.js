@@ -81,6 +81,11 @@ export function isActiveCategory(classification) {
   return classification?.category === 'working' || classification?.attentionRequired === true;
 }
 
+export function sessionMatchesSearch(session, query, host = '', directory = '') {
+  const searchable = `${host} ${directory} ${session.title} ${session.directory} ${session.activity} ${session.agent} ${(session.todos || []).map(todo => todo.content).join(' ')}`;
+  return searchable.toLowerCase().includes(query.toLowerCase());
+}
+
 // Presentation maps derived categories to familiar dashboard labels/classes.
 export function sessionState(session, online, classification) {
   const category = classification?.category ?? classifySessions([session], online).get(session.id).category;
