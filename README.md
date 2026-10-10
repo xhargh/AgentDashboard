@@ -117,9 +117,22 @@ The plugin creates a stable machine ID in `$XDG_CONFIG_HOME/opencode-supervisor/
 
 Session state is held in memory. Companion restarts recover from the next plugin heartbeat. Plugin generations report a stable machine ID, process ID, and generation start time. A newer generation with the same machine ID and process ID marks the prior generation **Replaced**; different process IDs remain separate concurrent instances. Replaced and merely offline instances remain distinguishable and are retained for up to 24 hours. Older plugin reports without machine IDs remain accepted and are grouped by hostname. Idle sessions are retained up to a soft 500-session limit per plugin; active sessions are preferred. The companion accepts up to 1,000 sessions/report, 1 MiB/report and 2,000 retained instances.
 
-“Active” means busy, retrying, or waiting for permission. Idle and errored sessions are visible but not counted as active. Idle main agents display **Waiting for input** in amber; idle subagents display **Finished** in muted blue. Finished is inferred from the subagent being idle, not a permanent closed state: a recalled subagent returns to busy/retry/waiting as its status changes. Permission waits have a separate **Waiting for permission** badge. Offline instances always show **Offline** instead of these live states. Subagents are sessions with an OpenCode `parentID`; the display links them to their parent title. Activity reflects the latest tool event, not private model reasoning. Git snapshots refresh approximately every ten seconds, independently of the GUI. Child session folders are displayed, while Git panels describe the plugin instance's project folder. Missing Git, unborn branches, and non-repository folders are handled without affecting OpenCode.
+“Active” includes working or retrying agents, permission waits, errors, and parent summaries with child attention. Offline classification takes precedence over stale session status, so an offline permission wait is not active. Idle main agents display **Waiting for input** in amber; idle subagents are classified as recently finished and remain visible through the existing grace period before the finished-subagent filter hides them. A recalled subagent returns to its current working, permission, or error classification as its reported status changes. Parent rows summarize child branches with attention-required descendants. These categories are derived for monitoring; the original OpenCode status is preserved. Subagents are sessions with an OpenCode `parentID`; the display links them to their parent title. Activity reflects the latest tool event, not private model reasoning. Git snapshots refresh approximately every ten seconds, independently of the GUI. Child session folders are displayed, while Git panels describe the plugin instance's project folder. Missing Git, unborn branches, and non-repository folders are handled without affecting OpenCode.
 
 ## Verification and development
+
+### Run all CI checks in Docker
+
+Install Docker Engine or Docker Desktop with BuildKit support; the host does not need Node.js, npm, Chromium, or Playwright dependencies. From the repository root, run:
+
+```bash
+docker build -t opencode-supervisor-ci .
+docker run --rm -v "$PWD:/workspace" -w /workspace -e CI=1 opencode-supervisor-ci
+```
+
+The image is based on the official Playwright `v1.56.1-noble` image, which pins Chromium and its Linux runtime dependencies to the Playwright version in `package.json`; the image includes Node 22.16 or newer. The container runs `npm ci`, `npm test`, `npm run check`, and `npm run test:e2e` in that order. The workflow in `.github/workflows/e2e.yml` builds and runs the same image for browser E2E.
+
+The current directory is mounted at `/workspace`, so the lockfile and source are read directly from the checkout. `npm ci` installs dependencies in the container; `node_modules` is ignored by the Docker build and is not needed on the host. Docker needs network access during image build and `npm ci` to download the base image and npm packages. Playwright starts its test server on `127.0.0.1:4317` inside the container. The tests reach it internally, so no host port needs to be published; if you do publish the port for debugging, bind it to `127.0.0.1` rather than exposing it to the LAN. No external test server or service is required.
 
 ```bash
 npm run check
@@ -129,7 +142,9 @@ npm run smoke
 
 Tests cover token-free local reporting, automatic dashboard connection, local-only binding, remote/foreign-origin rejection, network login, HTTP authentication and validation, cross-origin rejection, state revisions and conditional responses, multiple computers, disconnect expiry, plugin session events, parent/subagent relationships, actual Git status/log/worktree collection, and exclusion of raw tool arguments. They invoke the real HTTP request handler in memory so they run without permission to bind ports.
 
-`npm run smoke` is a separate real-network test: it starts an isolated OpenCode server with this plugin, creates parent/child sessions through the OpenCode API, and waits for them in the companion. It needs `opencode` on PATH, permission to open localhost ports, and any network access required by OpenCode itself. It makes no LLM calls. Temporary files and processes are cleaned up.
+`npm run smoke` is the separate, opt-in live-runtime smoke test; neither `npm test` nor `npm run check` needs OpenCode or live ports. It starts an isolated OpenCode server with this plugin, creates parent/child sessions through the OpenCode API, verifies their reported relationship, idle state, and lifecycle timestamps, then checks disconnection and recovery after restarting the OpenCode process. Restart checks that the machine identity is stable while the process/instance identity changes. Smoke config, data, cache, state, and home directories are temporary; the test uses no existing OpenCode config and cleans up its processes and files. It makes no LLM calls.
+
+The live smoke requires `opencode` on `PATH`, permission to bind localhost ports, and any network access OpenCode itself needs. Its no-LLM server/session operations verify creation and initial idle telemetry, but do not cause agent execution, so busy/idle resumption, permission waits/replies, retry/error events, and their reporting remain covered by deterministic plugin tests rather than this live smoke. Those execution-driven scenarios depend on an agent run and, for permissions and failures, suitable runtime/tool conditions; they are not silently treated as live-runtime coverage.
 
 Source layout:
 
