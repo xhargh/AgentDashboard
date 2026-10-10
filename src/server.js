@@ -18,7 +18,11 @@ function validReport(v) {
       (s.directory === undefined || typeof s.directory === 'string') &&
       (s.activity === undefined || typeof s.activity === 'string') && (s.agent === undefined || typeof s.agent === 'string') &&
       (s.todos === undefined || Array.isArray(s.todos))) &&
-    (v.git === undefined || v.git && typeof v.git === 'object' && !Array.isArray(v.git));
+    (v.git === undefined || v.git && typeof v.git === 'object' && !Array.isArray(v.git)) &&
+    (v.events === undefined || Array.isArray(v.events) && v.events.length <= 200 && v.events.every(e => e &&
+       typeof e.sessionId === 'string' && e.sessionId.length <= 200 && typeof e.timestamp === 'string' &&
+       Number.isFinite(Date.parse(e.timestamp)) && ['created','busy','idle','waiting','error','retry','permissionAnswered','deleted'].includes(e.kind) &&
+       typeof e.summary === 'string' && e.summary.length <= 100));
 }
 export function createServer({ token, now = Date.now } = {}) {
   if (token && token.length < 24) throw new Error('SUPERVISOR_TOKEN must contain at least 24 characters');
