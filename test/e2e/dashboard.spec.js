@@ -191,3 +191,40 @@ test('renders nested agents, preserves expansion, surfaces descendant attention,
   await expect(root).toHaveAttribute('open', '');
   await expect(child).toHaveAttribute('open', '');
 });
+
+test('shows sanitized chronological per-agent activity and preserves expansion across polls', async ({ page }) => {
+  let polls = 0;
+  await installStateFixture(page, () => {
+    polls++;
+    const state = report(polls > 1 ? 'Build dashboard updated' : 'Build dashboard');
+    state.instances[0].events = [
+      { sessionId: 'root-alpha', timestamp: '2026-01-01T10:02:00.000Z', kind: 'waiting', summary: 'private permission payload' },
+      { sessionId: 'root-alpha', timestamp: '2026-01-01T10:01:00.000Z', kind: 'busy', summary: '<script>secret</script>' },
+      { sessionId: 'root-alpha', timestamp: 'invalid', kind: 'error', summary: 'ignored' },
+      { sessionId: 'root-alpha', timestamp: '2026-01-01T10:03:00.000Z', kind: 'error', summary: 'raw error detail' },
+    ];
+    return state;
+  });
+  await page.goto('/');
+  const card = page.locator('.session-card').filter({ hasText: 'Build dashboard' }).first();
+  const timeline = card.locator('details.activity-timeline');
+  await expect(timeline).toContainText('Recent activity · 3');
+  await timeline.locator('summary').click();
+  await expect(timeline.locator('.activity-kind')).toHaveText(['Working', 'Permission requested', 'Error']);
+  await expect(timeline.locator('time')).toHaveCount(3);
+  await expect(timeline).not.toContainText('private permission payload');
+  await expect(timeline).not.toContainText('raw error detail');
+  await expect(timeline).not.toContainText('<script>');
+  await expect(page.getByText('Build dashboard updated', { exact: true })).toBeVisible();
+  await expect(timeline).toHaveAttribute('open', '');
+  await expect(timeline.locator('.activity-kind')).toHaveText(['Working', 'Permission requested', 'Error']);
+});
+
+test('shows a compact empty activity state for agents without event history', async ({ page }) => {
+  await installStateFixture(page, () => report());
+  await page.goto('/');
+  const card = page.locator('.session-card').filter({ hasText: 'Fix API' }).first();
+  const timeline = card.locator('details.activity-timeline');
+  await timeline.locator('summary').click();
+  await expect(timeline).toContainText('No recent activity reported.');
+});
