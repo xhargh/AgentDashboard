@@ -2,6 +2,7 @@ import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createSession, markActivity, markState } from './session-lifecycle.js';
 const exec = promisify(execFile);
 
 async function git(cwd, args) {
@@ -37,12 +38,16 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
   const sessions = new Map();
   let gitInfo = {}, lastGit = 0, sending = false, stopped = false, dirty = false, eventTimer;
   const session = id => {
-    if (!sessions.has(id)) sessions.set(id, { id, title: 'Untitled session', directory, status: 'idle', activity: 'Ready' });
+    if (!sessions.has(id)) sessions.set(id, createSession(id, { title: 'Untitled session', directory, status: 'idle', activity: 'Ready' }));
     return sessions.get(id);
   };
-  const info = value => {
+  const info = (value, { restored = false } = {}) => {
     if (!value?.id) return;
-    Object.assign(session(value.id), { title: value.title || 'Untitled session', parentID: value.parentID,
+    if (!sessions.has(value.id)) sessions.set(value.id, createSession(value.id, {
+      title: value.title || 'Untitled session', parentID: value.parentID, directory: value.directory || directory,
+      status: 'idle', activity: 'Ready',
+    }, { restored }));
+    else Object.assign(session(value.id), { title: value.title || 'Untitled session', parentID: value.parentID,
       directory: value.directory || directory });
   };
   async function send() {
@@ -69,7 +74,7 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
   try {
     const listed = await Promise.race([client.session.list({ query: { directory } }),
       new Promise((_, reject) => { const t = setTimeout(() => reject(new Error('timeout')), 2000); t.unref?.(); })]);
-    for (const value of listed.data || []) if (value.directory === directory) info(value);
+    for (const value of listed.data || []) if (value.directory === directory) info(value, { restored: true });
     const statuses = await Promise.race([client.session.status({ query: { directory } }),
       new Promise((_, reject) => { const t = setTimeout(() => reject(new Error('timeout')), 2000); t.unref?.(); })]);
     for (const [id, status] of Object.entries(statuses.data || {})) if (sessions.has(id)) session(id).status = status.type;
@@ -84,27 +89,28 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
       if (event.type === 'session.deleted') sessions.delete(p.info?.id);
       if (p.sessionID) {
         const s = session(p.sessionID);
-        if (event.type === 'session.status') { s.status = p.status.type; if (s.status === 'idle') s.activity = 'Ready'; }
-        if (event.type === 'session.idle') { s.status = 'idle'; s.activity = 'Ready'; }
-        if (event.type === 'session.error') { s.status = 'error'; s.activity = p.error?.data?.message || 'Session error'; }
-        if (event.type === 'permission.asked' || event.type === 'permission.updated') { s.status = 'waiting'; s.activity = 'Waiting for permission'; }
-        if (event.type === 'permission.replied') { s.status = 'busy'; s.activity = 'Permission answered'; }
-        if (event.type === 'todo.updated') s.todos = p.todos?.map(t => ({ content: t.content, status: t.status }));
+        if (event.type === 'session.status') { markState(s, p.status.type); if (s.status === 'idle') s.activity = 'Ready'; }
+        if (event.type === 'session.idle') { markState(s, 'idle'); s.activity = 'Ready'; }
+        if (event.type === 'session.error') { markState(s, 'error'); s.activity = p.error?.data?.message || 'Session error'; markActivity(s); }
+        if (event.type === 'permission.asked' || event.type === 'permission.updated') { markState(s, 'waiting'); s.activity = 'Waiting for permission'; markActivity(s); }
+        if (event.type === 'permission.replied') { markState(s, 'busy'); s.activity = 'Permission answered'; markActivity(s); }
+        if (event.type === 'todo.updated') { s.todos = p.todos?.map(t => ({ content: t.content, status: t.status })); markActivity(s); }
       }
       if (event.type === 'message.updated' && p.info?.sessionID) {
         const s = session(p.info.sessionID); s.agent = p.info.agent || p.info.mode || s.agent;
         if (p.info.path?.cwd) s.directory = p.info.path.cwd;
+        markActivity(s);
       }
       if (event.type === 'message.part.updated' && p.part?.type === 'tool') {
         const part = p.part, s = session(part.sessionID);
-        s.activity = `${part.tool}: ${part.state.title || part.state.status}`;
+        s.activity = `${part.tool}: ${part.state.title || part.state.status}`; markActivity(s);
       }
       // Bound historical memory; active sessions are retained preferentially.
       if (sessions.size > 500) for (const [id, s] of sessions) { if (s.status === 'idle') sessions.delete(id); if (sessions.size <= 500) break; }
       scheduleReport();
     },
     'tool.execute.before': async input => {
-      const s = session(input.sessionID); s.status = 'busy'; s.activity = `Running ${input.tool}`; scheduleReport();
+      const s = session(input.sessionID); markState(s, 'busy'); s.activity = `Running ${input.tool}`; markActivity(s); scheduleReport();
     },
   };
 };
