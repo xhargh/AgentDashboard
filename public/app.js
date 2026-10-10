@@ -1,80 +1,200 @@
-import { sessionState } from './session-state.js';
+import { buildSessionTree, classifySessions, isActiveCategory, isFinishedSubagentHidden, sessionMatchesSearch, sessionState } from './session-state.js';
 const $ = id => document.getElementById(id);
 let token = '', instances = [], revision = null, pending = false, authRequired = false;
-const active = s => ['busy', 'retry', 'waiting'].includes(s.status);
+let notificationEnabled = false, initializedAttention = false;
+const previousStatuses = new Map();
+const originalTitle = document.title;
+const expandedAgents = new Set();
+const expandedActivity = new Set();
 const machineKey = i => i.machineId || `legacy:${i.host}`;
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
+function reconcile(parent, desired) {
+  if (!parent.querySelectorAll) { parent.replaceChildren(...desired.children); return; }
+  const keyed = new Map([...parent.querySelectorAll('[data-agent-key]')].map(node => [node.dataset.agentKey, node]));
+  function sync(current, next) {
+    if (current.nodeType === Node.TEXT_NODE) { if (current.textContent !== next.textContent) current.textContent = next.textContent; return current; }
+    for (const attr of [...current.attributes]) if (!(current.tagName === 'DETAILS' && attr.name === 'open') && !next.hasAttribute(attr.name)) current.removeAttribute(attr.name);
+    for (const attr of [...next.attributes]) if (!(current.tagName === 'DETAILS' && attr.name === 'open') && current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value);
+    reconcileChildren(current, [...next.childNodes]);
+    return current;
+  }
+  function reconcileChildren(target, children) {
+    let position = 0;
+    for (const next of children) {
+      const key = next.dataset?.agentKey;
+      let current = key ? keyed.get(key) : target.childNodes[position];
+      if (!key && current?.dataset?.agentKey) current = null;
+      if (current && (current.nodeType !== next.nodeType || current.nodeName !== next.nodeName)) current = null;
+      if (!current) current = next;
+      else sync(current, next);
+      const atPosition = target.childNodes[position];
+      if (atPosition !== current) target.insertBefore(current, atPosition || null);
+      position++;
+    }
+    while (target.childNodes.length > position) target.lastChild.remove();
+  }
+  reconcileChildren(parent, [...desired.childNodes]);
+}
+const eventKinds = {
+  created: ['Session created', 'activity-created'], busy: ['Working', 'activity-work'], idle: ['Became idle', 'activity-complete'],
+  waiting: ['Permission requested', 'activity-permission'], error: ['Error', 'activity-error'], retry: ['Retrying', 'activity-work'],
+  permissionAnswered: ['Permission answered', 'activity-permission'], deleted: ['Session ended', 'activity-complete'],
+};
+function activityEvents(instance, sessionId) {
+  return (Array.isArray(instance.events) ? instance.events : [])
+    .filter(event => event?.sessionId === sessionId && eventKinds[event.kind] && Number.isFinite(Date.parse(event.timestamp)))
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)).slice(-5);
+}
 function render() {
-  const online = instances.filter(i => i.online), sessions = online.flatMap(i => i.sessions || []);
-  $('metrics').replaceChildren(...[
+  const online = instances.filter(i => i.online);
+  const sessionClassifications = new Map(instances.map(i => [i.instanceId, classifySessions(i.sessions, i.online)]));
+  const classificationsFor = i => sessionClassifications.get(i.instanceId);
+  const sessions = online.flatMap(i => i.sessions.map(s => ({ session: s, classification: classificationsFor(i).get(s.id) })));
+  const metrics = el('div');
+  metrics.append(...[
     ['Computers online', new Set(online.map(machineKey)).size], ['OpenCode instances', online.length],
-    ['Active agents', sessions.filter(s => !s.parentID && active(s)).length], ['Active subagents', sessions.filter(s => s.parentID && active(s)).length],
+    ['Active agents', sessions.filter(({ session, classification }) => !session.parentID && isActiveCategory(classification)).length],
+    ['Active subagents', sessions.filter(({ session, classification }) => session.parentID && isActiveCategory(classification)).length],
   ].map(([label, value]) => { const n = el('article', undefined, 'metric'); n.append(el('span', label), el('strong', value)); return n; }));
+  reconcile($('metrics'), metrics);
   const selected = $('host').value;
   const machines = new Map(instances.map(i => [machineKey(i), i]));
-  $('host').replaceChildren(new Option('All computers', ''), ...[...machines].sort((a, b) => a[1].host.localeCompare(b[1].host)).map(([key, i]) =>
-    new Option(instances.filter(other => other.host === i.host).length > 1 ? `${i.host} (${key.slice(0, 8)})` : i.host, key)));
+  const options = [...machines].sort((a, b) => a[1].host.localeCompare(b[1].host)).map(([key, i]) =>
+    new Option(instances.filter(other => other.host === i.host).length > 1 ? `${i.host} (${key.slice(0, 8)})` : i.host, key));
+  if (!$('host').options || $('host').options.length !== options.length + 1 || options.some((option, index) => $('host').options[index + 1]?.value !== option.value)) {
+    $('host').replaceChildren(new Option('All computers', ''), ...options);
+  }
   $('host').value = selected;
   const query = $('search').value.toLowerCase();
-  const fleet = $('fleet'); fleet.replaceChildren();
-  let hiddenOffline = 0;
+  const fleet = el('div');
+  const groups = [
+    ['needs-attention', 'Needs attention', 'Permission requests and errors', []],
+    ['working', 'Working', 'Currently active sessions', []],
+    ['waiting-for-input', 'Waiting for input', 'Idle main agents ready for your next message', []],
+    ['recently-finished', 'Recently finished', 'Completed subagents available if recalled', []],
+    ['offline', 'Offline', 'Instances no longer reporting', []],
+  ];
   for (const i of instances.filter(i => !selected || machineKey(i) === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
-    if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
-    const instanceSessions = i.sessions || [];
-    const hiddenFinished = $('hide-finished').checked ? instanceSessions.filter(s => s.parentID && s.status === 'idle').length : 0;
-    const visible = instanceSessions.filter(s => (!$('hide-finished').checked || !s.parentID || s.status !== 'idle') &&
-      (!$('hide-waiting').checked || !i.online || s.parentID || s.status !== 'idle') &&
-      (!$('active').checked || (i.online && active(s))) &&
-      `${i.host} ${i.directory || ''} ${s.title || ''} ${s.directory || ''} ${s.activity || ''} ${s.agent || ''}`.toLowerCase().includes(query));
-    if (!visible.length && ($('active').checked || query && !`${i.host} ${i.directory || ''}`.toLowerCase().includes(query))) continue;
-    const card = el('article', undefined, 'instance');
-    const head = el('div', undefined, 'instance-head'), title = el('div');
-    const path = i.directory || 'Path hidden';
-    title.append(el('h3', i.directory ? i.directory.split('/').filter(Boolean).at(-1) || i.directory : 'Monitored instance'), el('code', path));
-    const meta = el('div', undefined, 'machine'); meta.append(el('strong', i.host), el('span', `${i.online ? '● Online' : '○ Offline'} · PID ${i.pid} · ${Math.max(0, Math.floor((Date.now() - i.lastSeen) / 1000))}s ago`, i.online ? 'online' : 'muted'));
-    head.append(title, meta); card.append(head);
-    for (const s of visible.sort((a, b) => (a.parentID || a.id).localeCompare(b.parentID || b.id) || Number(!!a.parentID) - Number(!!b.parentID))) {
-      const display = sessionState(s, i.online);
-      const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
-      info.append(el('strong', `${s.parentID ? '↳ ' : ''}${s.title || 'Session'}`), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Unavailable'}`, 'activity'));
-      if (s.directory) info.append(el('code', s.directory));
-      if (s.parentID) info.append(el('p', `Subagent of ${i.sessions?.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
-      if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content || ''}`)); info.append(todos); }
-      const state = el('div', undefined, 'session-state'), badge = el('span', display.label, `badge ${display.className}`);
-      badge.title = display.detail;
-      state.append(badge, el('small', s.agent || (s.parentID ? 'subagent' : 'agent')));
-      row.append(info, state); card.append(row);
+    const eligible = new Set();
+    for (const s of i.sessions) {
+      const classification = classificationsFor(i).get(s.id);
+      if ($('hide-offline').checked && !i.online) continue;
+      if ($('hide-finished').checked && isFinishedSubagentHidden(s)) continue;
+      if ($('hide-waiting').checked && i.online && !s.parentID && classification.category === 'waiting-for-input' && !classification.childAttentionCount) continue;
+      if ($('active').checked && (!i.online || !isActiveCategory(classification))) continue;
+      if (!sessionMatchesSearch(s, query, i.host, i.directory)) continue;
+      const group = groups.find(([category]) => category === classification.category);
+      if (group) eligible.add(s.id);
     }
-    if (hiddenFinished) card.append(el('p', `${hiddenFinished} finished subagent${hiddenFinished === 1 ? '' : 's'} hidden`, 'empty'));
-    if (!visible.length && !hiddenFinished) card.append(el('p', i.sessions.length ? 'No sessions match the current filters.' : i.online ? 'Connected. Waiting for session activity.' : 'Offline. No session activity recorded.', 'empty'));
-    if (i.git?.root) {
-      const details = el('details'); details.dataset.instance = i.instanceId; const summary = el('summary', 'Git workspace'); details.append(summary);
-      const grid = el('div', undefined, 'git-grid');
-      for (const [key, label] of [['status', 'Status'], ['log', 'Recent commits'], ['worktrees', 'Worktrees']]) {
-        const block = el('section'); block.append(el('h4', label), el('pre', typeof i.git[key] === 'string' ? i.git[key] || 'Clean / empty' : 'Waiting for Git snapshot')); grid.append(block);
+    function hasEligible(node) { return eligible.has(node.session.id) || node.children.some(hasEligible); }
+    function appendNode(parent, node) {
+      if (!hasEligible(node)) return;
+      const { session: s, children } = node, classification = classificationsFor(i).get(s.id);
+      const display = sessionState(s, i.online, classification), key = `${i.instanceId}:${s.id}`;
+      const container = children.some(hasEligible) ? el('details', undefined, 'agent-tree') : el('div', undefined, 'agent-tree');
+      container.dataset.agentKey = key;
+      if (container.tagName === 'DETAILS') {
+        container.open = expandedAgents.has(key);
+        container.addEventListener('toggle', () => container.open ? expandedAgents.add(key) : expandedAgents.delete(key));
+        const summary = el('summary', undefined, 'agent-tree-summary');
+        summary.append(el('span', `${s.title} · ${display.label}`, 'tree-title'), el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
+        if (classification.attentionRequired) summary.append(el('span', 'Attention in this branch', 'attention-summary'));
+        container.append(summary);
       }
-      details.append(grid); card.append(details);
+      const card = el('article', undefined, 'session-card');
+      const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
+      info.append(el('strong', s.title), el('p', `${i.host} · ${i.directory}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
+      if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
+      if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
+      if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
+      const events = activityEvents(i, s.id), activityKey = `${i.instanceId}:${s.id}`;
+      const activity = el('details', undefined, 'activity-timeline');
+      activity.open = expandedActivity.has(activityKey);
+      activity.addEventListener('toggle', () => activity.open ? expandedActivity.add(activityKey) : expandedActivity.delete(activityKey));
+      const activitySummary = el('summary', `Recent activity · ${events.length}`, 'activity-summary');
+      activity.append(activitySummary);
+      if (!events.length) activity.append(el('p', 'No recent activity reported.', 'empty activity-empty'));
+      else {
+        const list = el('ol', undefined, 'activity-list');
+        for (const event of events) {
+          const [label, kindClass] = eventKinds[event.kind], item = el('li', undefined, `activity-event ${kindClass}`);
+          const date = new Date(event.timestamp), time = el('time', date.toLocaleString()); time.dateTime = date.toISOString();
+          item.append(el('span', label, 'activity-kind'), time);
+          list.append(item);
+        }
+        activity.append(list);
+      }
+      card.append(activity);
+      const state = el('div', undefined, 'session-state'), badge = el('span', display.label, `badge ${display.className}`); badge.title = display.detail;
+      state.append(badge, el('small', s.agent || (s.parentID ? 'subagent' : 'agent'))); row.append(info, state); card.append(row);
+      if (i.git?.root && !s.parentID) {
+        const details = el('details'); details.dataset.instance = i.instanceId; details.append(el('summary', 'Git workspace'));
+        const grid = el('div', undefined, 'git-grid');
+        for (const [key, label] of [['status', 'Status'], ['log', 'Recent commits'], ['worktrees', 'Worktrees']]) { const block = el('section'); block.append(el('h4', label), el('pre', typeof i.git[key] === 'string' ? i.git[key] || 'Clean / empty' : 'Waiting for Git snapshot')); grid.append(block); }
+        details.append(grid); card.append(details);
+      }
+      container.append(card);
+      if (children.some(hasEligible)) { const nested = el('div', undefined, 'agent-tree-children'); for (const child of children) appendNode(nested, child); container.append(nested); }
+      parent.append(container);
     }
-    fleet.append(card);
+    for (const root of buildSessionTree(i.sessions)) {
+      if (!hasEligible(root)) continue;
+      const classification = classificationsFor(i).get(root.session.id);
+      groups.find(([category]) => category === (classification.attentionRequired ? 'needs-attention' : classification.category))?.[3].push({ i, root });
+    }
   }
-  if (!fleet.children.length) {
+  for (const [id, heading, description, items] of groups) {
+    if (!items.length && id !== 'needs-attention') continue;
+    const section = el('section', undefined, `session-group group-${id}`);
+    const title = el('div', undefined, 'group-heading');
+    const h = el('h2', `${heading} · ${items.length}`); h.id = `group-${id}-heading`;
+    title.append(h, el('p', description, 'muted')); section.append(title);
+    if (!items.length) section.append(el('p', 'Nothing needs your attention right now.', 'empty'));
+    for (const { i, root } of items) appendNode(section, root);
+    fleet.append(section);
+  }
+  if (groups.every(([, , , items]) => !items.length)) {
     const empty = el('div', undefined, 'empty');
-    const hidden = hiddenOffline ? `${hiddenOffline} offline instance${hiddenOffline === 1 ? '' : 's'} hidden. ` : '';
-    empty.append(el('h3', instances.length ? 'No matching agents' : 'Ready for your first agent'), el('p', instances.length ? `${hidden}Adjust the filters to see more activity.` : 'Install the plugin and start OpenCode. For other computers, configure the companion URL and token.'));
+    empty.append(el('h3', instances.length ? 'No sessions match the current filters' : 'Ready for your first agent'), el('p', instances.length ? 'Adjust the filters to see more activity.' : 'Install the plugin and start OpenCode. For other computers, configure the companion URL and token.'));
     fleet.append(empty);
   }
+  reconcile($('fleet'), fleet);
+}
+function updateAttentionNotifications(nextInstances) {
+  const live = nextInstances.filter(i => i.online);
+  let count = 0;
+  const currentStatuses = new Map();
+  for (const instance of live) {
+    for (const session of instance.sessions) {
+      const identity = `${instance.instanceId}:${session.id}`;
+      currentStatuses.set(identity, session.status);
+      const attention = session.status === 'waiting' || session.status === 'error';
+      if (attention) count++;
+      const previous = previousStatuses.get(identity);
+      if (initializedAttention && attention && previous !== undefined && previous !== session.status) {
+        if (notificationEnabled && 'Notification' in window && Notification.permission === 'granted') {
+          try { new Notification(session.status === 'waiting' ? 'Permission required' : 'Agent error', { body: `${session.title} · ${instance.host}` }); } catch {}
+        }
+      }
+    }
+  }
+  previousStatuses.clear();
+  for (const [identity, status] of currentStatuses) previousStatuses.set(identity, status);
+  initializedAttention = true;
+  if ($('tab-count')?.checked) document.title = count ? `(${count}) ${originalTitle}` : originalTitle;
 }
 async function poll() {
   if ((authRequired && !token) || pending) return;
   pending = true;
   const usedToken = token;
-  const open = new Set([...document.querySelectorAll('details[open]')].map(n => n.dataset.instance));
+  const open = new Set([...document.querySelectorAll('details[open][data-instance]')].map(n => n.dataset.instance));
   try {
     const headers = usedToken ? { authorization: `Bearer ${usedToken}` } : {};
     if (revision !== null) headers['if-none-match'] = `"${revision}"`;
     const response = await fetch('/api/state', { headers, signal: AbortSignal.timeout(5000) });
     if (response.status === 401) {
-      revision = null; authRequired = true; $('login').hidden = false; $('dashboard').hidden = true; $('logout').hidden = true;
+      revision = null;
+      authRequired = true; $('login').hidden = false; $('dashboard').hidden = true; $('logout').hidden = true;
       $('connection').textContent = 'Network mode · token required';
       $('error').textContent = usedToken ? 'Invalid access token' : '';
       token = ''; return;
@@ -83,14 +203,32 @@ async function poll() {
     if (!response.ok) throw new Error(`Companion returned ${response.status}`);
     const data = await response.json(); if (token !== usedToken) return;
     authRequired = data.mode !== 'local';
-    revision = data.revision; instances = data.instances; $('login').hidden = true; $('dashboard').hidden = false; $('logout').hidden = !authRequired;
+    revision = data.revision;
+    updateAttentionNotifications(data.instances);
+    instances = data.instances; $('login').hidden = true; $('dashboard').hidden = false; $('logout').hidden = !authRequired;
     $('connection').textContent = authRequired ? '● Connected · network mode' : '● Connected · local only'; $('error').textContent = ''; render();
-    document.querySelectorAll('details').forEach(n => n.open = open.has(n.dataset.instance));
-  } catch (e) { revision = null; $('connection').textContent = '○ Disconnected · retrying'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
+    document.querySelectorAll('details[data-instance]').forEach(n => n.open = open.has(n.dataset.instance));
+  } catch (e) { revision = null; initializedAttention = false; previousStatuses.clear(); $('connection').textContent = '○ Disconnected · retrying'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
   finally { pending = false; }
 }
 $('login').addEventListener('submit', e => { e.preventDefault(); token = $('token').value.trim(); $('token').value = ''; void poll(); });
 $('logout').onclick = () => { token = ''; revision = null; instances = []; $('dashboard').hidden = true; $('login').hidden = false; $('logout').hidden = true; $('connection').textContent = 'Disconnected'; };
 for (const id of ['host', 'search', 'active', 'hide-finished', 'hide-waiting', 'hide-offline']) $(id).addEventListener('input', render);
+$('notifications').addEventListener('change', async event => {
+  notificationEnabled = event.target.checked;
+  if (!notificationEnabled) return;
+  if (!('Notification' in window)) { event.target.checked = false; notificationEnabled = false; $('notifications-help').textContent = 'Browser notifications are not supported in this browser.'; return; }
+  if (Notification.permission === 'default') {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') { event.target.checked = false; notificationEnabled = false; }
+  } else if (Notification.permission !== 'granted') { event.target.checked = false; notificationEnabled = false; }
+});
+$('tab-count').addEventListener('change', () => {
+  if (!$('tab-count').checked) document.title = originalTitle;
+  else {
+    const count = instances.filter(i => i.online).flatMap(i => i.sessions).filter(s => s.status === 'waiting' || s.status === 'error').length;
+    document.title = count ? `(${count}) ${originalTitle}` : originalTitle;
+  }
+});
 void poll();
 setInterval(poll, 2000);
