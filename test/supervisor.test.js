@@ -48,6 +48,16 @@ test('accepts legacy reports without a machine identity', async t => {
   const state = await (await request('/api/state')).json();
   assert.equal(state.instances[0].machineId, undefined);
 });
+test('accepts reports with privacy-filtered optional metadata', async t => {
+  const { request } = await start(t);
+  const minimal = { instanceId: 'private', machineId: 'machine', host: 'alpha', pid: 1,
+    sessions: [{ id: 'session', status: 'busy' }] };
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(minimal) })).status, 200);
+  const state = await (await request('/api/state')).json();
+  assert.equal(state.instances[0].sessions[0].status, 'busy');
+  assert.equal(state.instances[0].sessions[0].title, undefined);
+  assert.equal(state.instances[0].git, undefined);
+});
 test('state revision changes only for meaningful reports and derived transitions', async t => {
   let time = 1000;
   const { request } = await start(t, { now: () => time });
@@ -178,6 +188,37 @@ test('plugin refuses remote telemetry without a token', async t => {
   t.after(() => { if (old === undefined) delete process.env.OPENCODE_SUPERVISOR_URL; else process.env.OPENCODE_SUPERVISOR_URL = old; });
   process.env.OPENCODE_SUPERVISOR_URL = 'http://192.168.1.10:4317';
   assert.deepEqual(await SupervisorPlugin({ directory: '/tmp' }), {});
+});
+test('status-only telemetry strips metadata before transmission and validates settings', async t => {
+  const originalFetch = globalThis.fetch;
+  const old = Object.fromEntries(['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_TELEMETRY', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
+  const root = await mkdtemp(join(tmpdir(), 'supervisor-privacy-'));
+  let sent;
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(root, { recursive: true, force: true });
+  });
+  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
+  process.env.OPENCODE_SUPERVISOR_TOKEN = token;
+  process.env.OPENCODE_SUPERVISOR_TELEMETRY = '{"profile":"status-only"}';
+  process.env.XDG_CONFIG_HOME = root;
+  globalThis.fetch = async (_url, init) => { sent = JSON.parse(init.body); return new Response('', { status: 200 }); };
+  const plugin = await SupervisorPlugin({ directory: '/private/project', worktree: '/private/worktree', client: { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } } });
+  t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/private/project' } } }));
+  await plugin.event({ event: { type: 'session.created', properties: { info: { id: 'session', title: 'Secret title', directory: '/private/project' } } } });
+  for (let n = 0; n < 100 && !sent?.sessions?.length; n++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(sent.sessions[0].id, 'session');
+  assert.equal(sent.sessions[0].status, 'idle');
+  assert.equal(sent.sessions[0].title, undefined);
+  assert.equal(sent.sessions[0].directory, undefined);
+  assert.equal(sent.directory, undefined);
+  assert.equal(sent.git, undefined);
+  assert.equal(sent.machineId.length > 0, true);
+  assert.deepEqual(await (async () => {
+    process.env.OPENCODE_SUPERVISOR_TELEMETRY = '{"unknown":false}';
+    return SupervisorPlugin({ directory: '/tmp' });
+  })(), {});
 });
 test('plugin classifies HTTP, network, and timeout report failures without leaking details', async t => {
   const originalFetch = globalThis.fetch;

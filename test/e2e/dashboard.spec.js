@@ -152,3 +152,17 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
   await expect(details).toHaveAttribute('open', '');
   await expect(details.getByRole('heading', { name: 'Recent commits' })).toBeVisible();
 });
+
+test('renders status-only instances with optional metadata omitted', async ({ page }) => {
+  const now = Date.now();
+  await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [{
+    instanceId: 'status-only', machineId: 'machine', host: 'private-host', pid: 42, online: true, lastSeen: now,
+    sessions: [{ id: 'session', status: 'busy' }],
+  }] }));
+  await page.goto('/');
+
+  await expect(page.locator('#fleet article.instance').getByText('private-host', { exact: true })).toBeVisible();
+  await expect(page.getByText('Monitored instance', { exact: true })).toBeVisible();
+  await expect(page.getByText('Session', { exact: true })).toBeVisible();
+  await expect(page.locator('#fleet .badge').getByText('busy', { exact: true })).toBeVisible();
+});
