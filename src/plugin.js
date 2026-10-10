@@ -1,5 +1,7 @@
-import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { link, mkdir, open, readFile, unlink } from 'node:fs/promises';
+import { homedir, hostname } from 'node:os';
+import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createSession, markActivity, markState } from './session-lifecycle.js';
@@ -35,6 +37,28 @@ function transportFailure(error) {
   return error?.name === 'TimeoutError' || error?.name === 'AbortError'
     ? 'timeout' : 'network failure';
 }
+async function machineId() {
+  const directory = join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'opencode-supervisor');
+  const path = join(directory, 'machine-id');
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  try { return (await readFile(path, 'utf8')).trim(); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const id = randomUUID();
+  const temporary = join(directory, `.machine-id-${randomUUID()}`);
+  const file = await open(temporary, 'wx', 0o600);
+  try {
+    await file.writeFile(id);
+    await file.close();
+    await link(temporary, path);
+    return id;
+  } catch (error) {
+    try { await file.close(); } catch {}
+    if (error.code !== 'EEXIST') throw error;
+    return (await readFile(path, 'utf8')).trim();
+  } finally {
+    await unlink(temporary).catch(() => {});
+  }
+}
 function reportWarning(category) {
   // Deliberately omit request/response bodies, credentials, and error messages.
   console.warn(`[OpenCode Supervisor] Telemetry report failed: ${category}`);
@@ -51,6 +75,7 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
     if (endpoint.hostname === 'localhost') endpoint.hostname = '127.0.0.1';
   }
   const instanceId = randomUUID();
+  const machine = await machineId();
   const sessions = new Map();
   let gitInfo = {}, lastGit = 0, sending = false, stopped = false, dirty = false, eventTimer;
   const session = id => {
@@ -74,7 +99,7 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
       if (Date.now() - lastGit > 10000) { gitInfo = await inspectGit(directory); lastGit = Date.now(); }
       const response = await fetch(new URL('/api/report', endpoint), {
         method: 'POST', redirect: 'error', headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'content-type': 'application/json' },
-        body: JSON.stringify({ instanceId, host: process.env.OPENCODE_SUPERVISOR_HOST || hostname(), pid: process.pid,
+        body: JSON.stringify({ instanceId, machineId: machine, host: process.env.OPENCODE_SUPERVISOR_HOST || hostname(), pid: process.pid,
           directory, worktree, sessions: [...sessions.values()], git: gitInfo }), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {

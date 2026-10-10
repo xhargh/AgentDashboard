@@ -10,6 +10,7 @@ const assets = new Map(await Promise.all(['index.html', 'app.js', 'session-state
 function equal(a, b) { const x = Buffer.from(a || ''), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); }
 function validReport(v) {
   return v && typeof v.instanceId === 'string' && v.instanceId.length <= 100 &&
+    (v.machineId === undefined || typeof v.machineId === 'string' && v.machineId.length <= 100) &&
     typeof v.host === 'string' && v.host.length <= 200 && typeof v.directory === 'string' &&
     Array.isArray(v.sessions) && v.sessions.length <= 1000 && v.sessions.every(s => s && typeof s.id === 'string' &&
       typeof s.status === 'string' && typeof s.title === 'string' && typeof s.directory === 'string') &&
