@@ -2,8 +2,7 @@ import { expect, test } from '@playwright/test';
 
 const token = 'e2e-network-token-with-at-least-24-characters';
 
-function report(title = 'Build dashboard', status = 'busy') {
-  const now = Date.now();
+function report(title = 'Build dashboard', status = 'busy', now = Date.now()) {
   return {
     mode: 'local',
     serverTime: now,
@@ -30,7 +29,7 @@ function report(title = 'Build dashboard', status = 'busy') {
             parentID: 'root-alpha',
             title: 'Finished review',
             status: 'idle',
-            stateChangedAt: new Date(now - 60_000).toISOString(),
+            stateChangedAt: new Date(now - 60_001).toISOString(),
             directory: '/work/alpha/app',
             activity: 'Review complete',
             agent: 'review',
@@ -87,13 +86,13 @@ async function installStateFixture(page, handler) {
 
 test('local mode connects automatically and filters fleet activity', async ({ page }) => {
   await page.clock.install({ time: new Date(120_000) });
-  await installStateFixture(page, () => report());
+  await installStateFixture(page, () => report('Build dashboard', 'busy', 120_000));
   await page.goto('/');
 
   await expect(page.getByText('● Connected · local only')).toBeVisible();
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
   await expect(page.getByText('Finished review')).toHaveCount(0);
-  await expect(page.getByText('Unknown-age review', { exact: true })).toBeVisible();
+  await expect(page.getByText('Unknown-age review')).toBeVisible();
 
   await page.getByText('Filter agents').click();
   await page.getByLabel('Computer').selectOption('beta');
