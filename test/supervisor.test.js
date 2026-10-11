@@ -136,7 +136,52 @@ test('validates optional model metadata while accepting legacy sessions', async 
   value.sessions[0].model.contextLimit = -1;
   assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 400);
   delete value.sessions[0].model;
+  value.sessions[0].usage = { input: 10, output: 3, partial: false, contextEstimate: 12 };
   assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 200);
+  value.sessions[0].usage.input = Number.MAX_SAFE_INTEGER + 1;
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 400);
+  delete value.sessions[0].usage;
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 200);
+});
+test('tracks bounded idempotent usage per session and keeps latest context separate', async t => {
+  const originalFetch = globalThis.fetch;
+  const keys = ['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_TELEMETRY', 'XDG_CONFIG_HOME'];
+  const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const root = await mkdtemp(join(tmpdir(), 'supervisor-usage-'));
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(root, { recursive: true, force: true });
+  });
+  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317'; process.env.OPENCODE_SUPERVISOR_TOKEN = token;
+  process.env.XDG_CONFIG_HOME = root; delete process.env.OPENCODE_SUPERVISOR_TELEMETRY;
+  const reports = [];
+  globalThis.fetch = async (_url, init) => { reports.push(JSON.parse(init.body)); return new Response('', { status: 200 }); };
+  const client = { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) }, config: { providers: async () => ({ data: { providers: [
+    { id: 'p', models: { m: { name: 'Model', limit: { context: 1000 } } } },
+  ] } }) } };
+  const plugin = await AgentDashboardPlugin({ directory: '/tmp', client });
+  t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
+  const emit = (sessionID, info) => plugin.event({ event: { type: 'message.updated', properties: { info: {
+    sessionID, role: 'assistant', providerID: 'p', modelID: 'm', ...info,
+  } } } });
+  await emit('parent', { id: 'msg-1', time: { created: 1 }, tokens: { input: 80, output: 10, reasoning: 4, cache: { read: 20, write: 2 } } });
+  await emit('child', { id: 'child-msg', time: { created: 1 }, tokens: { input: 7, output: 3 } });
+  await emit('parent', { id: 'msg-1', time: { created: 1 }, tokens: { input: 90 } });
+  await emit('parent', { id: 'msg-2', time: { created: 2 }, tokens: { input: 30, cache: { read: 5 } } });
+  await emit('parent', { id: 'old-msg', time: { created: 0 }, tokens: { input: 999 } });
+  for (let n = 0; n < 100 && !reports.some(r => r.sessions.some(s => s.id === 'parent' && s.usage)); n++) await new Promise(resolve => setTimeout(resolve, 10));
+  await new Promise(resolve => setTimeout(resolve, 280));
+  let parent = reports.at(-1).sessions.find(s => s.id === 'parent');
+  assert.deepEqual(parent.usage, { input: 1119, output: 10, reasoning: 4, cacheRead: 25, cacheWrite: 2, partial: false, contextEstimate: 35 });
+  assert.deepEqual(reports.at(-1).sessions.find(s => s.id === 'child').usage,
+    { input: 7, output: 3, reasoning: 0, cacheRead: 0, cacheWrite: 0, partial: false, contextEstimate: 7 });
+
+  for (let n = 0; n < 105; n++) await emit('parent', { id: `bounded-${n}`, time: { created: 10 + n }, tokens: { input: 1 } });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  parent = reports.at(-1).sessions.find(s => s.id === 'parent');
+  assert.equal(parent.usage.partial, true);
+  assert.equal(parent.usage.contextEstimate, 1, 'latest context can fall independently of lifetime totals');
 });
 test('reconciles same-process generations without merging concurrent instances', async t => {
   let time = 1000;
@@ -351,11 +396,15 @@ test('status-only telemetry strips metadata before transmission and validates se
   const plugin = await AgentDashboardPlugin({ directory: '/private/project', worktree: '/private/worktree', client: { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } } });
   t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/private/project' } } }));
   await plugin.event({ event: { type: 'session.created', properties: { info: { id: 'session', title: 'Secret title', directory: '/private/project' } } } });
+  await plugin.event({ event: { type: 'message.updated', properties: { info: { sessionID: 'session', role: 'assistant', id: 'message',
+    providerID: 'private-provider', modelID: 'private-model', variant: 'private-variant', tokens: { input: 12, output: 3 } } } } });
   for (let n = 0; n < 100 && !sent?.sessions?.length; n++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(sent.sessions[0].id, 'session');
   assert.equal(sent.sessions[0].status, 'idle');
   assert.equal(sent.sessions[0].title, undefined);
   assert.equal(sent.sessions[0].directory, undefined);
+  assert.equal(sent.sessions[0].model, undefined);
+  assert.equal(sent.sessions[0].usage, undefined);
   assert.equal(sent.directory, undefined);
   assert.equal(sent.git, undefined);
   assert.equal(sent.machineId.length > 0, true);
@@ -386,7 +435,7 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
   await git('commit', '-m', 'PRIVATE_COMMIT');
 
   for (const [category, forbidden] of [
-    ['titles', 'PRIVATE_TITLE'], ['tasks', 'PRIVATE_TASK'], ['toolActivity', 'PRIVATE_ACTIVITY'],
+    ['titles', 'PRIVATE_TITLE'], ['tasks', 'PRIVATE_TASK'], ['toolActivity', 'PRIVATE_ACTIVITY'], ['modelMetrics', 'PRIVATE_MODEL'],
     ['paths', root], ['git', 'PRIVATE_COMMIT'],
   ]) {
     process.env.OPENCODE_SUPERVISOR_TELEMETRY = JSON.stringify({ [category]: false });
@@ -408,7 +457,9 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
       part: { sessionID: 'session', type: 'tool', tool: 'PRIVATE_ACTIVITY', state: { status: 'running', input: { command: 'RAW_TOOL_ARGUMENT' }, output: 'RAW_TOOL_OUTPUT' } },
     } } });
     await plugin.event({ event: { type: 'todo.updated', properties: { sessionID: 'session', todos: [{ content: 'PRIVATE_TASK', status: 'pending' }] } } });
-    await plugin.event({ event: { type: 'message.updated', properties: { info: { sessionID: 'session', content: 'RAW_PROMPT and PRIVATE_REASONING' } } } });
+    await plugin.event({ event: { type: 'message.updated', properties: { info: { sessionID: 'session', role: 'assistant', id: 'message',
+      providerID: 'PRIVATE_MODEL', modelID: 'model', variant: 'variant', tokens: { input: 10, reasoning: 2 },
+      content: 'RAW_PROMPT and PRIVATE_REASONING' } } } });
     await new Promise(resolve => setTimeout(resolve, 350));
     const sent = reports.at(-1);
     assert.ok(sent, `${category}: report was transmitted`);
@@ -427,6 +478,7 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
       assert.equal(sent.sessions[0].directory, undefined);
     }
     if (category === 'git') assert.equal(sent.git, undefined);
+    if (category === 'modelMetrics') { assert.equal(sent.sessions[0].model, undefined); assert.equal(sent.sessions[0].usage, undefined); }
     await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory } } });
   }
 });
