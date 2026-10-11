@@ -196,6 +196,61 @@ test('renders status-only instances without optional metadata', async ({ page })
   await expect(page.getByText('undefined', { exact: true })).toHaveCount(0);
 });
 
+test('shows independent model, context, and token metrics and updates after compaction', async ({ page }) => {
+  let polls = 0;
+  await installStateFixture(page, () => {
+    polls++;
+    const state = report();
+    const root = state.instances[0].sessions[0];
+    root.model = { providerID: 'provider-a', modelID: 'model-a', name: 'Friendly A', variant: 'high', contextLimit: 200000 };
+    root.usage = { input: 140000, output: 10000, reasoning: 1200, cacheRead: 0, cacheWrite: 30, contextEstimate: polls < 3 ? 150000 : 25000, partial: false };
+    const child = state.instances[0].sessions.find(session => session.id === 'child-alpha');
+    child.model = { providerID: 'provider-b', modelID: 'model-b', contextLimit: 200000 };
+    child.usage = { input: 179000, output: 1000, reasoning: 0, cacheRead: 0, cacheWrite: 0, contextEstimate: 180000, partial: false };
+    return state;
+  });
+  await page.goto('/');
+  const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  await root.locator(':scope > summary').click();
+  const rootCard = root.locator(':scope > article.session-card');
+  await expect(rootCard.locator('.model-label')).toHaveText('provider-a / Friendly A');
+  await expect(rootCard.locator('.variant-label')).toHaveText('high variant');
+  await expect(rootCard.locator('.context-metric')).toContainText('150,000 / 200,000 (75%)');
+  await expect(rootCard.locator('.context-warning-text')).toHaveText('Context estimate is at least 75%');
+  await expect(rootCard.locator('progress')).toHaveAttribute('aria-valuetext', '75 percent estimated');
+  await expect(rootCard.locator('.usage-metric')).toContainText('150,000 input + output tokens');
+  await rootCard.locator('.usage-breakdown summary').click();
+  await expect(rootCard.locator('.usage-breakdown')).toContainText('Reasoning');
+  await expect(rootCard.locator('.usage-breakdown')).toContainText('1,200');
+
+  const child = page.locator('[data-agent-key="instance-alpha:child-alpha"]');
+  const childCard = child.locator(':scope > article.session-card');
+  await expect(childCard.locator('.model-label')).toHaveText('provider-b / model-b');
+  await expect(childCard.locator('.variant-label')).toHaveText('Default variant');
+  await expect(childCard.locator('.context-warning-text')).toHaveText('Context estimate is at least 90%');
+  await expect(childCard.locator('.usage-metric')).toContainText('12 input + output tokens');
+
+  await expect(rootCard.locator('.context-metric')).toContainText('25,000 / 200,000 (13%)');
+  await expect(rootCard.locator('.context-warning-text')).toHaveCount(0);
+  await expect(rootCard.locator('.usage-breakdown')).toHaveAttribute('open', '');
+});
+
+test('unknown and privacy-limited metrics render placeholders without fabricated zeros', async ({ page }) => {
+  const now = Date.now();
+  await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [{
+    instanceId: 'status-only', machineId: 'machine', host: 'private-host', pid: 42, online: true, lastSeen: now,
+    sessions: [{ id: 'session', status: 'busy' }],
+  }] }));
+  await page.goto('/');
+  const card = page.locator('[data-agent-key="status-only:session"] .session-card');
+  await expect(card.locator('.model-label')).toHaveText('Model unavailable');
+  await expect(card.locator('.variant-label')).toHaveText('Variant unavailable');
+  await expect(card.locator('.context-unavailable')).toHaveText('Context unavailable');
+  await expect(card.locator('.usage-pending')).toHaveText('Usage pending');
+  await expect(card.locator('progress')).toHaveCount(0);
+  await expect(card).not.toContainText('0%');
+});
+
 test('warns per instance when reports use legacy host-based identity', async ({ page }) => {
   const now = Date.now();
   await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [

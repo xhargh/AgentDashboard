@@ -4,6 +4,7 @@ let token = '', instances = [], revision = null, pending = false, authRequired =
 let notificationEnabled = false, initializedAttention = false;
 const previousStatuses = new Map();
 const originalTitle = document.title;
+const numberFormat = new Intl.NumberFormat();
 const machineKey = i => i.machineId || `legacy:${i.host}`;
 const expandedAgents = new Set();
 const expandedActivity = new Set();
@@ -44,6 +45,43 @@ function activityEvents(instance, sessionId) {
   return (Array.isArray(instance.events) ? instance.events : [])
     .filter(event => event?.sessionId === sessionId && eventKinds[event.kind] && Number.isFinite(Date.parse(event.timestamp)))
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)).slice(-5);
+}
+function renderMetrics(info, session, online) {
+  const metrics = el('section', undefined, 'agent-metrics');
+  const model = session.model;
+  const modelLabel = model?.providerID && (model.name || model.modelID)
+    ? `${model.providerID} / ${model.name || model.modelID}` : 'Model unavailable';
+  metrics.append(el('p', modelLabel, 'model-label'));
+  metrics.append(el('p', model?.variant ? `${model.variant} variant` : model ? 'Default variant' : 'Variant unavailable', 'variant-label'));
+  const usage = session.usage;
+  if (Number.isSafeInteger(usage?.contextEstimate) && Number.isSafeInteger(model?.contextLimit) && model.contextLimit > 0) {
+    const used = usage.contextEstimate, limit = model.contextLimit, percentage = Math.min(100, used / limit * 100);
+    const context = el('div', undefined, `context-metric${percentage >= 90 ? ' context-critical' : percentage >= 75 ? ' context-warning' : ''}`);
+    context.append(el('span', `Context estimate · ${numberFormat.format(used)} / ${numberFormat.format(limit)} (${Math.round(percentage)}%)${online ? '' : ' · last reported'}`));
+    const progress = el('progress'); progress.max = limit; progress.value = Math.min(used, limit);
+    progress.setAttribute('aria-label', `Estimated context usage ${numberFormat.format(used)} of ${numberFormat.format(limit)} tokens`);
+    progress.setAttribute('aria-valuetext', `${Math.round(percentage)} percent estimated`);
+    context.append(progress);
+    if (percentage >= 90) context.append(el('strong', 'Context estimate is at least 90%', 'context-warning-text'));
+    else if (percentage >= 75) context.append(el('strong', 'Context estimate is at least 75%', 'context-warning-text'));
+    metrics.append(context);
+  } else metrics.append(el('p', 'Context unavailable', 'context-unavailable'));
+  if (!usage) metrics.append(el('p', 'Usage pending', 'usage-pending'));
+  else {
+    const input = usage.input || 0, output = usage.output || 0;
+    const lifetime = el('div', undefined, 'usage-metric');
+    lifetime.append(el('strong', `${numberFormat.format(input + output)} input + output tokens`));
+    if (usage.partial) lifetime.append(el('small', ' · partial history'));
+    if (!online) lifetime.append(el('small', ' · last reported'));
+    const breakdown = el('details', undefined, 'usage-breakdown');
+    breakdown.append(el('summary', 'Usage breakdown'));
+    const list = el('dl');
+    for (const [key, label] of [['input', 'Input'], ['output', 'Output'], ['reasoning', 'Reasoning'], ['cacheRead', 'Cache read'], ['cacheWrite', 'Cache write']]) {
+      list.append(el('dt', label), el('dd', usage[key] === undefined ? 'Unknown' : numberFormat.format(usage[key])));
+    }
+    breakdown.append(list); metrics.append(lifetime, breakdown);
+  }
+  info.append(metrics);
 }
 function render() {
   const online = instances.filter(i => i.online);
@@ -111,8 +149,9 @@ function render() {
       }
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
       info.append(el('strong', s.title || 'Session'), el('p', i.directory ? `${i.host} · ${i.directory}` : i.host, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
-      if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
-      if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
+       if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
+       if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
+       renderMetrics(info, s, i.online);
       if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
       const events = activityEvents(i, s.id), activityKey = `${i.instanceId}:${s.id}`;
       const activity = el('details', undefined, 'activity-timeline');
