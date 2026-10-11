@@ -186,16 +186,20 @@ function render() {
         else { expandedAgents.delete(key); collapsedAgents.add(key); }
       });
       const summary = el('summary', undefined, 'agent-tree-summary');
-      summary.append(el('span', `${s.title || 'Session'} · ${display.label}`, 'tree-title'));
+      summary.append(el('span', s.title || 'Session', 'tree-title'));
+      const summaryBadge = el('span', display.label, `badge ${display.className}`);
+      summaryBadge.title = display.detail;
+      summary.append(summaryBadge);
       if (children.length) summary.append(el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
       if (classification.attentionRequired) summary.append(el('span', 'Attention in this branch', 'attention-summary'));
+      summary.append(el('span', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'tree-activity'));
       container.append(summary);
       const card = el('article', undefined, 'session-card');
       if (!i.machineId) {
         card.append(el('p', 'This instance is using a legacy host-based identity because its report has no machine ID. Update or reinstall the OpenCode Supervisor plugin to use a stable machine identity.', 'instance-warning'));
       }
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div', undefined, 'session-info');
-      info.append(el('strong', s.title || 'Session'), el('p', `Computer ${i.host} · OpenCode instance PID ${i.pid ?? 'unknown'} · ${s.directory || i.directory || 'unknown path'}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
+      info.append(el('p', `Computer ${i.host} · OpenCode instance PID ${i.pid ?? 'unknown'} · ${s.directory || i.directory || 'unknown path'}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
        if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
        if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
         renderMetrics(info, s, i.online, i.sessions);

@@ -112,7 +112,8 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(page.locator('.metric').filter({ hasText: 'OpenCode instances' })).toContainText('Online instance reports; one computer may run several');
   const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
   await expect(root.locator(':scope > summary')).toContainText('2 children');
-  await expect(root.locator(':scope > summary .tree-title')).toContainText('Build dashboard · busy');
+  await expect(root.locator(':scope > summary .tree-title')).toHaveText('Build dashboard');
+  await expect(root.locator(':scope > summary .badge')).toHaveText('busy');
   await root.locator(':scope > summary').click();
   await expect(root.locator('.session-info > p.muted').first()).toHaveText('Computer alpha · OpenCode instance PID 2101 · /work/alpha/app');
   await expect(page.getByText('Finished review', { exact: true })).toBeVisible();
@@ -273,7 +274,7 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
   await expect(details.getByRole('heading', { name: 'Recent commits' })).toBeVisible();
 });
 
-test('agent summary status label follows the latest base-agent status without a duplicate badge', async ({ page }) => {
+test('agent summary status badge follows the latest base-agent status', async ({ page }) => {
   let polls = 0;
   await installStateFixture(page, () => {
     polls++;
@@ -281,23 +282,26 @@ test('agent summary status label follows the latest base-agent status without a 
   });
   await page.goto('/');
   const summary = page.locator('[data-agent-key="instance-alpha:root-alpha"] > summary');
-  await expect(summary.locator('.tree-title')).toContainText('Build dashboard · busy');
-  await expect(summary.locator('.tree-title')).toContainText('Build dashboard · Waiting for input');
-  await expect(summary.locator('.badge')).toHaveCount(0);
+  await expect(summary.locator('.tree-title')).toHaveText('Build dashboard');
+  await expect(summary.locator('.badge')).toHaveText('busy');
+  await expect(summary.locator('.badge')).toHaveText('Waiting for input');
+  await expect(summary.locator('.tree-activity')).toHaveText('Editing app.js');
 });
 
-test('agent summary status presentation is independent of expansion state', async ({ page }) => {
+test('agent summary keeps status and activity visible when expanded without repeating the title', async ({ page }) => {
   await installStateFixture(page, () => report());
   await page.goto('/');
   const tree = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
   const summary = tree.locator(':scope > summary');
-  await expect(summary.locator('.tree-title')).toContainText('Build dashboard · busy');
-  await expect(summary.locator('.badge')).toHaveCount(0);
+  await expect(summary.locator('.tree-title')).toHaveText('Build dashboard');
+  await expect(summary.locator('.badge')).toHaveText('busy');
+  await expect(summary.locator('.tree-activity')).toHaveText('Editing app.js');
 
   await summary.click();
   await expect(tree).toHaveAttribute('open', '');
-  await expect(summary.locator('.badge')).toHaveCount(0);
+  await expect(summary.locator('.badge')).toHaveText('busy');
   await expect(tree.locator(':scope > article.session-card .session-state .badge')).toHaveCount(1);
+  await expect(tree.locator(':scope > article.session-card .session-info > strong')).toHaveCount(0);
 });
 
 test('offline agents show one consistent summary status with or without children', async ({ page }) => {
@@ -314,8 +318,7 @@ test('offline agents show one consistent summary status with or without children
 
   for (const id of ['offline-leaf', 'offline-parent']) {
     const summary = page.locator(`[data-agent-key="instance-alpha:${id}"] > summary`);
-    await expect(summary.locator('.tree-title')).toContainText('Offline');
-    await expect(summary.locator('.badge')).toHaveCount(0);
+    await expect(summary.locator('.badge')).toHaveText('Offline');
   }
 });
 
@@ -329,7 +332,7 @@ test('renders status-only instances without optional metadata', async ({ page })
 
   await expect(page.locator('#fleet').getByText('Computer private-host · OpenCode instance PID 42 · unknown path', { exact: true })).toBeVisible();
   await expect(page.getByText('Session', { exact: true })).toBeVisible();
-  await expect(page.locator('#fleet .badge')).toHaveText('busy');
+  await expect(page.locator('[data-agent-key="status-only:session"] > summary .badge')).toHaveText('busy');
   await expect(page.getByText('undefined', { exact: true })).toHaveCount(0);
 });
 
@@ -440,7 +443,7 @@ test('renders status-only instances with optional metadata omitted', async ({ pa
 
   await expect(page.locator('#host option').filter({ hasText: 'private-host' })).toHaveCount(1);
   await expect(page.getByText('Session', { exact: true })).toBeVisible();
-  await expect(page.locator('#fleet .badge').getByText('busy', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-agent-key="status-only:session"] > summary .badge')).toHaveText('busy');
 });
 
 test('distinguishes replaced instances from instances that are merely offline', async ({ page }) => {
