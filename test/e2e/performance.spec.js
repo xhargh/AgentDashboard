@@ -42,10 +42,11 @@ test('large nested fleet reuses keyed DOM and preserves interaction state throug
   await page.goto('/');
   const root = page.locator('[data-agent-key="perf-0:agent-0"]');
   await expect(root).toBeVisible();
-  await root.locator('summary').click();
+  await root.locator(':scope > summary.agent-tree-summary').click();
   const expandedChild = page.locator('details[data-agent-key="perf-0:agent-1"]');
-  await expandedChild.locator('summary').click();
+  await expandedChild.locator(':scope > summary.agent-tree-summary').click();
 
+  await page.getByText('Filter agents', { exact: true }).click();
   const search = page.getByLabel('Search');
   await search.fill('State update');
   await search.focus();
