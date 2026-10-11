@@ -279,7 +279,8 @@ test('shows independent model, context, and token metrics and updates after comp
   await expect(rootCard.locator('.context-metric')).toContainText('150,000 / 200,000 (75%)');
   await expect(rootCard.locator('.context-warning-text')).toHaveText('Context estimate is at least 75%');
   await expect(rootCard.locator('progress')).toHaveAttribute('aria-valuetext', '75 percent estimated');
-  await expect(rootCard.locator('.usage-metric')).toContainText('150,000 input + output tokens');
+  await expect(rootCard.locator('.usage-metric')).toContainText('Own · 150,000 input + output tokens');
+  await expect(rootCard.locator('.aggregate-usage')).toHaveText('Total with subagents · 150,012 input + output tokens · some usage pending');
   await rootCard.locator('.usage-breakdown summary').click();
   await expect(rootCard.locator('.usage-breakdown')).toContainText('Reasoning');
   await expect(rootCard.locator('.usage-breakdown')).toContainText('1,200');
@@ -289,7 +290,7 @@ test('shows independent model, context, and token metrics and updates after comp
   await expect(childCard.locator('.model-label')).toHaveText('Provider B / model-b');
   await expect(childCard.locator('.variant-label')).toHaveText('Variant unavailable');
   await expect(childCard.locator('.context-warning-text')).toHaveText('Context estimate is at least 90%');
-  await expect(childCard.locator('.usage-metric')).toContainText('12 input + output tokens');
+  await expect(childCard.locator('.usage-metric')).toContainText('Own · 12 input + output tokens');
 
   await expect(rootCard.locator('.context-metric')).toContainText('25,000 / 200,000 (13%)');
   await expect(rootCard.locator('.context-warning-text')).toHaveCount(0);

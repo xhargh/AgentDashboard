@@ -154,10 +154,11 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
 .context-critical progress::-moz-progress-bar { background: #bd6550; }
 .context-warning-text { font-size: 10px; font-weight: 500; color: var(--warning); }
 .context-critical .context-warning-text { color: #ec9b87; }
-.usage-metric, .usage-pending { grid-column: 1; margin-top: 7px; }
+.usage-metric, .usage-pending, .aggregate-usage { grid-column: 1; margin-top: 7px; }
 .usage-metric { display: flex; gap: 4px; align-items: baseline; flex-wrap: wrap; }
 .usage-metric strong { font-size: 10px; font-weight: 500; color: var(--muted); }
 .usage-metric small { font-size: 10px; }
+.aggregate-usage { font-size: 10px; color: var(--text); }
 .session-card .usage-breakdown { grid-column: 2; padding: 0; align-self: start; margin-top: 7px; font-size: 11px; }
 .usage-breakdown dl { display: grid; grid-template-columns: 1fr auto; gap: 3px 16px; margin: 8px 0 0; padding: 10px 12px; background: var(--raised); border-radius: 6px; }
 .usage-breakdown dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
