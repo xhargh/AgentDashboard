@@ -8,6 +8,33 @@ const machineKey = i => i.machineId || `legacy:${i.host}`;
 const expandedAgents = new Set();
 const expandedActivity = new Set();
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
+function reconcile(parent, desired) {
+  if (!parent.querySelectorAll) { parent.replaceChildren(...desired.children); return; }
+  const keyed = new Map([...parent.querySelectorAll('[data-agent-key]')].map(node => [node.dataset.agentKey, node]));
+  function sync(current, next) {
+    if (current.nodeType === Node.TEXT_NODE) { if (current.textContent !== next.textContent) current.textContent = next.textContent; return current; }
+    for (const attr of [...current.attributes]) if (!(current.tagName === 'DETAILS' && attr.name === 'open') && !next.hasAttribute(attr.name)) current.removeAttribute(attr.name);
+    for (const attr of [...next.attributes]) if (!(current.tagName === 'DETAILS' && attr.name === 'open') && current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value);
+    reconcileChildren(current, [...next.childNodes]);
+    return current;
+  }
+  function reconcileChildren(target, children) {
+    let position = 0;
+    for (const next of children) {
+      const key = next.dataset?.agentKey;
+      let current = key ? keyed.get(key) : target.childNodes[position];
+      if (!key && current?.dataset?.agentKey) current = null;
+      if (current && (current.nodeType !== next.nodeType || current.nodeName !== next.nodeName)) current = null;
+      if (!current) current = next;
+      else sync(current, next);
+      const atPosition = target.childNodes[position];
+      if (atPosition !== current) target.insertBefore(current, atPosition || null);
+      position++;
+    }
+    while (target.childNodes.length > position) target.lastChild.remove();
+  }
+  reconcileChildren(parent, [...desired.childNodes]);
+}
 const eventKinds = {
   created: ['Session created', 'activity-created'], busy: ['Working', 'activity-work'], idle: ['Became idle', 'activity-complete'],
   waiting: ['Permission requested', 'activity-permission'], error: ['Error', 'activity-error'], retry: ['Retrying', 'activity-work'],
@@ -23,17 +50,20 @@ function render() {
   const sessionClassifications = new Map(instances.map(i => [i.instanceId, classifySessions(i.sessions, i.online)]));
   const classificationsFor = i => sessionClassifications.get(i.instanceId);
   const sessions = online.flatMap(i => i.sessions.map(s => ({ session: s, classification: classificationsFor(i).get(s.id) })));
-  $('metrics').replaceChildren(...[
+  const metrics = el('div');
+  metrics.append(...[
     ['Computers online', new Set(online.map(machineKey)).size], ['OpenCode instances', online.length],
     ['Active agents', sessions.filter(({ session, classification }) => !session.parentID && isActiveCategory(classification)).length],
     ['Active subagents', sessions.filter(({ session, classification }) => session.parentID && isActiveCategory(classification)).length],
   ].map(([label, value]) => { const n = el('article', undefined, 'metric'); n.append(el('span', label), el('strong', value)); return n; }));
+  reconcile($('metrics'), metrics);
   const selected = $('host').value;
   const machines = new Map(instances.map(i => [machineKey(i), i]));
-  $('host').replaceChildren(new Option('All computers', ''), ...[...machines].sort((a, b) => a[1].host.localeCompare(b[1].host)).map(([key, i]) => new Option(i.host, key)));
+  const options = [new Option('All computers', ''), ...[...machines].sort((a, b) => a[1].host.localeCompare(b[1].host)).map(([key, i]) => new Option(i.host, key))];
+  if (!$('host').options || $('host').options.length !== options.length || options.some((option, index) => $('host').options[index]?.value !== option.value || $('host').options[index]?.text !== option.text)) $('host').replaceChildren(...options);
   $('host').value = selected;
   const query = $('search').value.toLowerCase();
-  const fleet = $('fleet'); fleet.replaceChildren();
+  const fleet = el('div');
   const groups = [
     ['needs-attention', 'Needs attention', 'Permission requests and errors', []],
     ['working', 'Working', 'Currently active sessions', []],
@@ -61,7 +91,7 @@ function render() {
       if (!hasEligible(node)) return;
       const { session: s, children } = node, classification = classificationsFor(i).get(s.id);
       const display = sessionState(s, i.online, classification), key = `${i.instanceId}:${s.id}`;
-      const container = children.some(hasEligible) ? el('details', undefined, 'agent-tree') : el('div', undefined, 'agent-tree');
+      const container = children.length ? el('details', undefined, 'agent-tree') : el('div', undefined, 'agent-tree');
       container.dataset.agentKey = key;
       if (container.tagName === 'DETAILS') {
         container.open = expandedAgents.has(key);
@@ -104,7 +134,7 @@ function render() {
         details.append(grid); card.append(details);
       }
       container.append(card);
-      if (children.some(hasEligible)) { const nested = el('div', undefined, 'agent-tree-children'); for (const child of children) appendNode(nested, child); container.append(nested); }
+      if (children.length) { const nested = el('div', undefined, 'agent-tree-children'); for (const child of children) appendNode(nested, child); container.append(nested); }
       parent.append(container);
     }
     for (const root of buildSessionTree(i.sessions)) {
@@ -132,6 +162,7 @@ function render() {
     empty.append(el('h3', instances.length ? 'No sessions match the current filters' : 'Ready for your first agent'), el('p', instances.length ? `${hiddenOffline} offline instances hidden. Adjust the filters to see more activity.` : 'Install the plugin and start OpenCode. For other computers, configure the companion URL and token.'));
     fleet.append(empty);
   }
+  reconcile($('fleet'), fleet);
 }
 function updateAttentionNotifications(nextInstances) {
   const live = nextInstances.filter(i => i.online);
