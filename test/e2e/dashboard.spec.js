@@ -127,6 +127,16 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(page.locator('.tree-title').filter({ hasText: 'Fix API' })).toHaveCount(0);
 });
 
+test('local mode hides the computer filter when only one computer is reported', async ({ page }) => {
+  const state = report();
+  state.instances = [state.instances[0]];
+  await installStateFixture(page, () => state);
+  await page.goto('/');
+
+  await expect(page.getByText('● Connected · local only')).toBeVisible();
+  await expect(page.getByLabel('Computer')).toBeHidden();
+});
+
 test('network mode requires a token, rejects a bad token, and connects with a valid token', async ({ page }) => {
   await installStateFixture(page, authorization => {
     if (authorization !== `Bearer ${token}`) {
