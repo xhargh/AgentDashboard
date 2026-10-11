@@ -182,7 +182,8 @@ function render() {
         container.open = expandedAgents.has(key);
         container.addEventListener('toggle', () => container.open ? expandedAgents.add(key) : expandedAgents.delete(key));
         const summary = el('summary', undefined, 'agent-tree-summary');
-         summary.append(el('span', `${s.title || 'Session'} · ${display.label}`, 'tree-title'), el('span', display.label, `badge ${display.className}`));
+          summary.append(el('span', `${s.title || 'Session'} · ${display.label}`, 'tree-title'));
+          if (!container.open) summary.append(el('span', display.label, `badge ${display.className}`));
          if (children.length) summary.append(el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
         if (classification.attentionRequired) summary.append(el('span', 'Attention in this branch', 'attention-summary'));
         container.append(summary);
