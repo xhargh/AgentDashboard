@@ -6,6 +6,7 @@ const previousStatuses = new Map();
 const originalTitle = document.title;
 const numberFormat = new Intl.NumberFormat();
 const validSortFields = new Set(['activity', 'status', 'context', 'tokens', 'name']);
+const sortLabels = { activity: 'recent activity', status: 'status', context: 'current-context token usage', tokens: 'cumulative token usage', name: 'session name' };
 const savedSortField = globalThis.localStorage?.getItem('agentdashboard-session-sort');
 const savedSortDirection = globalThis.localStorage?.getItem('agentdashboard-session-sort-direction');
 let sortField = validSortFields.has(savedSortField) ? savedSortField : 'activity';
@@ -248,6 +249,13 @@ function render() {
       const category = classification.attentionRequired ? 'needs-attention' : classification.category;
       groups.find(([id]) => id === category)?.[3].push({ i, root, appendNode });
     }
+  }
+  if (sortField !== 'status') {
+    const sessions = groups.flatMap(([, , , items]) => items.filter(item => item.root));
+    const offlineInstances = groups.find(([id]) => id === 'offline')[3].filter(item => item.instanceOnly);
+    groups.splice(0, groups.length,
+      ['sorted-sessions', 'Sessions', `Sorted by ${sortLabels[sortField]}`, sessions],
+      ...(offlineInstances.length ? [['offline', 'Offline', 'Instances no longer reporting', offlineInstances]] : []));
   }
   for (const [id, heading, description, items] of groups) {
     if (!items.length) continue;
