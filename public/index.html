@@ -32,6 +32,10 @@
       <section class="fleet-controls" aria-label="Fleet controls">
         <div class="fleet-toolbar">
           <div class="fleet-title"><h2 class="fleet-heading">Agents</h2><span class="live-label"><span aria-hidden="true"></span>Live activity</span></div>
+          <div class="sort-controls">
+            <label for="session-sort">Sort by<select id="session-sort" aria-label="Sort sessions"><option value="activity">Recent activity</option><option value="status">Status</option><option value="context">Current context tokens</option><option value="tokens">Cumulative tokens</option><option value="name">Session name</option></select></label>
+            <button id="sort-direction" class="secondary-button" type="button" aria-label="Sort direction">↓</button>
+          </div>
           <label class="search-field" for="search"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span class="sr-only">Search</span><input id="search" type="search" placeholder="Search agents, tasks, folders…"></label>
         </div>
         <details class="filters">

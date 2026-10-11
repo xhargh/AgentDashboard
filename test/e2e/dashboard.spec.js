@@ -304,6 +304,34 @@ test('agent summary keeps status and activity visible when expanded without repe
   await expect(tree.locator(':scope > article.session-card .session-info > strong')).toHaveCount(0);
 });
 
+test('session sorting supports name, context, cumulative usage, direction, and survives refreshes', async ({ page }) => {
+  const state = report();
+  const root = state.instances[0].sessions[0];
+  root.usage = { contextEstimate: 100, input: 5, output: 5 };
+  state.instances[0].sessions.push({ id: 'alpha-task', title: 'Alpha task', status: 'busy', directory: '/work/alpha/app', activity: 'Working', lastActivityAt: '2026-01-02T00:00:00Z', usage: { contextEstimate: 50, input: 50, output: 50 } });
+  await installStateFixture(page, () => state);
+  await page.goto('/');
+  await page.getByText('Filter agents').click();
+  await page.locator('#active').check();
+
+  const working = page.locator('.group-working');
+  const names = () => working.locator(':scope > details.agent-tree > summary .tree-title').allTextContents();
+  await page.locator('#session-sort').selectOption('name');
+  await page.locator('#sort-direction').click();
+  await expect.poll(names).toEqual(['Alpha task', 'Build dashboard']);
+  await page.locator('#sort-direction').click();
+  await expect.poll(names).toEqual(['Build dashboard', 'Alpha task']);
+
+  await page.locator('#session-sort').selectOption('context');
+  await expect.poll(names).toEqual(['Build dashboard', 'Alpha task']);
+  await page.locator('#session-sort').selectOption('tokens');
+  await expect.poll(names).toEqual(['Alpha task', 'Build dashboard']);
+
+  await page.reload();
+  await expect(page.locator('#session-sort')).toHaveValue('tokens');
+  await expect.poll(names).toEqual(['Alpha task', 'Build dashboard']);
+});
+
 test('offline agents show one consistent summary status with or without children', async ({ page }) => {
   const state = report();
   state.instances = [{ ...state.instances[0], online: false, sessions: [

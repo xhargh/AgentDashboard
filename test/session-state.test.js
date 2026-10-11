@@ -1,6 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSessionTree, classifySessions, FINISHED_SUBAGENT_GRACE_MS, isActiveCategory, isFinishedSubagentHidden, sessionMatchesSearch, sessionState } from '../public/session-state.js';
+import { buildSessionTree, classifySessions, compareSessions, FINISHED_SUBAGENT_GRACE_MS, isActiveCategory, isFinishedSubagentHidden, sessionMatchesSearch, sessionState } from '../public/session-state.js';
+
+test('session sorting handles each field, direction, and missing values consistently', () => {
+  const sessions = [
+    { id: 'missing' },
+    { id: 'older', title: 'Beta', status: 'busy', lastActivityAt: '2026-01-01T00:00:00Z', usage: { contextEstimate: 20, input: 10, output: 5 } },
+    { id: 'newer', title: 'Alpha', status: 'waiting', lastActivityAt: '2026-01-02T00:00:00Z', usage: { contextEstimate: 10, input: 30, output: 5 } },
+  ];
+  const sorted = field => sessions.toSorted((a, b) => compareSessions(a, b, field));
+  assert.deepEqual(sorted('activity').map(session => session.id), ['newer', 'older', 'missing']);
+  assert.deepEqual(sorted('context').map(session => session.id), ['older', 'newer', 'missing']);
+  assert.deepEqual(sorted('tokens').map(session => session.id), ['newer', 'older', 'missing']);
+  assert.deepEqual(sorted('name').map(session => session.id), ['older', 'newer', 'missing']);
+  assert.deepEqual(sorted('status').map(session => session.id), ['newer', 'older', 'missing']);
+  assert.deepEqual(sessions.toSorted((a, b) => compareSessions(a, b, 'name', 'asc')).map(session => session.id), ['newer', 'older', 'missing']);
+  assert.deepEqual(sessions.toSorted((a, b) => compareSessions(a, b, 'tokens', 'asc')).map(session => session.id), ['older', 'newer', 'missing']);
+});
 
 test('an idle parent awaiting input is distinct from its three finished subagents', () => {
   const parent = { id: 'main', status: 'idle', activity: 'Ready' };

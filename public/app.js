@@ -1,10 +1,16 @@
-import { buildSessionTree, classifySessions, isActiveCategory, isFinishedSubagentHidden, sessionMatchesSearch, sessionState } from './session-state.js';
+import { buildSessionTree, classifySessions, compareSessions, isActiveCategory, isFinishedSubagentHidden, sessionMatchesSearch, sessionState } from './session-state.js';
 const $ = id => document.getElementById(id);
 let token = '', instances = [], revision = null, pending = false, authRequired = false;
 let notificationEnabled = false, initializedAttention = false;
 const previousStatuses = new Map();
 const originalTitle = document.title;
 const numberFormat = new Intl.NumberFormat();
+const validSortFields = new Set(['activity', 'status', 'context', 'tokens', 'name']);
+const savedSortField = globalThis.localStorage?.getItem('agentdashboard-session-sort');
+const savedSortDirection = globalThis.localStorage?.getItem('agentdashboard-session-sort-direction');
+let sortField = validSortFields.has(savedSortField) ? savedSortField : 'activity';
+let sortDirection = savedSortDirection === 'asc' ? 'asc' : 'desc';
+const sortNodes = nodes => [...nodes].sort((a, b) => compareSessions(a.session, b.session, sortField, sortDirection));
 const machineKey = i => i.machineId || `legacy:${i.host}`;
 const expandedAgents = new Set();
 const collapsedAgents = new Set();
@@ -150,6 +156,9 @@ function render() {
   }
   $('host').value = selected;
   const query = $('search').value.toLowerCase();
+  $('session-sort').value = sortField;
+  $('sort-direction').textContent = sortDirection === 'asc' ? '↑' : '↓';
+  $('sort-direction').setAttribute?.('aria-label', `Sort direction: ${sortDirection === 'asc' ? 'ascending' : 'descending'}`);
   const fleet = el('div');
   const groups = [
     ['needs-attention', 'Needs attention', 'Permission requests and errors', []],
@@ -230,7 +239,7 @@ function render() {
         details.append(grid); card.append(details);
       }
       container.append(card);
-      if (children.length) { const nested = el('div', undefined, 'agent-tree-children'); for (const child of children) appendNode(nested, child); container.append(nested); }
+      if (children.length) { const nested = el('div', undefined, 'agent-tree-children'); for (const child of sortNodes(children)) appendNode(nested, child); container.append(nested); }
       parent.append(container);
     }
     for (const root of buildSessionTree(i.sessions)) {
@@ -242,6 +251,7 @@ function render() {
   }
   for (const [id, heading, description, items] of groups) {
     if (!items.length) continue;
+    items.sort((a, b) => a.root && b.root ? compareSessions(a.root.session, b.root.session, sortField, sortDirection) : a.root ? -1 : b.root ? 1 : 0);
     const section = el('details', undefined, `session-group group-${id}`);
     section.dataset.agentKey = `group:${id}`;
     section.open = true;
@@ -318,6 +328,8 @@ async function poll() {
 $('login').addEventListener('submit', e => { e.preventDefault(); token = $('token').value.trim(); $('token').value = ''; void poll(); });
 $('logout').onclick = () => { token = ''; revision = null; instances = []; $('dashboard').hidden = true; $('login').hidden = false; $('logout').hidden = true; $('connection').textContent = 'Disconnected'; $('connection').dataset.state = 'disconnected'; };
 for (const id of ['host', 'search', 'active', 'hide-finished', 'hide-waiting', 'hide-offline']) $(id).addEventListener('input', render);
+$('session-sort').addEventListener('change', event => { sortField = event.target.value; globalThis.localStorage?.setItem('agentdashboard-session-sort', sortField); render(); });
+$('sort-direction').addEventListener('click', () => { sortDirection = sortDirection === 'asc' ? 'desc' : 'asc'; globalThis.localStorage?.setItem('agentdashboard-session-sort-direction', sortDirection); render(); });
 $('notifications').addEventListener('change', async event => {
   notificationEnabled = event.target.checked;
   if (!notificationEnabled) return;

@@ -86,6 +86,26 @@ export function sessionMatchesSearch(session, query, host = '', directory = '') 
   return searchable.toLowerCase().includes(query.toLowerCase());
 }
 
+const statusOrder = { waiting: 5, error: 4, busy: 3, retry: 2, idle: 1 };
+const sortValue = (session, field) => {
+  if (field === 'status') return statusOrder[session.status] ?? 1;
+  if (field === 'activity') return Date.parse(session.lastActivityAt || session.stateChangedAt || session.firstObservedAt);
+  if (field === 'context') return session.usage?.contextEstimate;
+  if (field === 'tokens') return Number.isSafeInteger(session.usage?.input) || Number.isSafeInteger(session.usage?.output)
+    ? (session.usage.input || 0) + (session.usage.output || 0) : undefined;
+  if (field === 'name') return session.title;
+  return undefined;
+};
+
+export function compareSessions(a, b, field, direction = 'desc') {
+  const left = sortValue(a, field), right = sortValue(b, field);
+  const leftMissing = left === undefined || left === null || typeof left === 'number' && !Number.isFinite(left);
+  const rightMissing = right === undefined || right === null || typeof right === 'number' && !Number.isFinite(right);
+  if (leftMissing || rightMissing) return leftMissing === rightMissing ? 0 : leftMissing ? 1 : -1;
+  const comparison = typeof left === 'string' ? left.localeCompare(right, undefined, { sensitivity: 'base' }) : left - right;
+  return direction === 'asc' ? comparison : -comparison;
+}
+
 // Presentation maps derived categories to familiar dashboard labels/classes.
 export function sessionState(session, online, classification) {
   const category = classification?.category ?? classifySessions([session], online).get(session.id).category;
