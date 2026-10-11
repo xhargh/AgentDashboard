@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, readFile, rm, mkdir, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -46,4 +47,15 @@ test('no token forces loopback even with a network HOST in .env', async t => {
 test('a configured token enables network binding by default', async t => {
   const { stdout } = await startup(t, { exported: 'abcdefghijklmnopqrstuvwxyz0123456789' });
   assert.equal(stdout, 'STARTUP_OK 0.0.0.0');
+});
+
+test('installed plugin loads with its local module dependencies', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'supervisor-plugin-install-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await promisify(execFile)('npm', ['run', 'install-plugin'], {
+    cwd: new URL('..', import.meta.url), env: { ...process.env, XDG_CONFIG_HOME: dir }, timeout: 10000,
+  });
+  const installed = pathToFileURL(join(dir, 'opencode/plugins/supervisor.js')).href;
+  const plugin = await import(installed);
+  assert.equal(typeof plugin.SupervisorPlugin, 'function');
 });
