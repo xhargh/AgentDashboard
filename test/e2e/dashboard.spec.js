@@ -112,7 +112,7 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(page.locator('.metric').filter({ hasText: 'OpenCode instances' })).toContainText('Online instance reports; one computer may run several');
   const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
   await expect(root.locator(':scope > summary')).toContainText('2 children');
-  await expect(root.locator(':scope > summary .badge')).toHaveText('busy');
+  await expect(root.locator(':scope > summary .tree-title')).toContainText('Build dashboard · busy');
   await root.locator(':scope > summary').click();
   await expect(root.locator('.session-info > p.muted').first()).toHaveText('Computer alpha · OpenCode instance PID 2101 · /work/alpha/app');
   await expect(page.getByText('Finished review', { exact: true })).toBeVisible();
@@ -273,7 +273,7 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
   await expect(details.getByRole('heading', { name: 'Recent commits' })).toBeVisible();
 });
 
-test('folded agent status label follows the latest base-agent status', async ({ page }) => {
+test('agent summary status label follows the latest base-agent status without a duplicate badge', async ({ page }) => {
   let polls = 0;
   await installStateFixture(page, () => {
     polls++;
@@ -281,21 +281,42 @@ test('folded agent status label follows the latest base-agent status', async ({ 
   });
   await page.goto('/');
   const summary = page.locator('[data-agent-key="instance-alpha:root-alpha"] > summary');
-  await expect(summary.locator('.badge')).toHaveText('busy');
-  await expect(summary.locator('.badge')).toHaveText('Waiting for input');
+  await expect(summary.locator('.tree-title')).toContainText('Build dashboard · busy');
+  await expect(summary.locator('.tree-title')).toContainText('Build dashboard · Waiting for input');
+  await expect(summary.locator('.badge')).toHaveCount(0);
 });
 
-test('expanded session shows its status badge only in the session content', async ({ page }) => {
+test('agent summary status presentation is independent of expansion state', async ({ page }) => {
   await installStateFixture(page, () => report());
   await page.goto('/');
   const tree = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
   const summary = tree.locator(':scope > summary');
-  await expect(summary.locator('.badge')).toHaveCount(1);
+  await expect(summary.locator('.tree-title')).toContainText('Build dashboard · busy');
+  await expect(summary.locator('.badge')).toHaveCount(0);
 
   await summary.click();
   await expect(tree).toHaveAttribute('open', '');
   await expect(summary.locator('.badge')).toHaveCount(0);
   await expect(tree.locator(':scope > article.session-card .session-state .badge')).toHaveCount(1);
+});
+
+test('offline agents show one consistent summary status with or without children', async ({ page }) => {
+  const state = report();
+  state.instances = [{ ...state.instances[0], online: false, sessions: [
+    { id: 'offline-leaf', title: 'Offline leaf', status: 'busy' },
+    { id: 'offline-parent', title: 'Offline parent', status: 'busy' },
+    { id: 'offline-child', parentID: 'offline-parent', title: 'Offline child', status: 'busy' },
+  ] }];
+  await installStateFixture(page, () => state);
+  await page.goto('/');
+  await page.getByText('Filter agents').click();
+  await page.locator('#hide-offline').uncheck();
+
+  for (const id of ['offline-leaf', 'offline-parent']) {
+    const summary = page.locator(`[data-agent-key="instance-alpha:${id}"] > summary`);
+    await expect(summary.locator('.tree-title')).toContainText('Offline');
+    await expect(summary.locator('.badge')).toHaveCount(0);
+  }
 });
 
 test('renders status-only instances without optional metadata', async ({ page }) => {
