@@ -48,11 +48,11 @@ function updateUsage(session, info) {
     }
   }
 }
-function telemetryConfig(value = process.env.OPENCODE_SUPERVISOR_TELEMETRY) {
+function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
   if (value === undefined || value === '') return Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, true]));
   let config;
-  try { config = JSON.parse(value); } catch { throw new Error('OPENCODE_SUPERVISOR_TELEMETRY must be valid JSON'); }
-  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('OPENCODE_SUPERVISOR_TELEMETRY must be an object');
+  try { config = JSON.parse(value); } catch { throw new Error('AGENTDASHBOARD_TELEMETRY must be valid JSON'); }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('AGENTDASHBOARD_TELEMETRY must be an object');
   if (config.profile !== undefined && config.profile !== 'status-only') throw new Error('Unknown telemetry profile');
   for (const key of Object.keys(config)) {
   if (key !== 'profile' && !TELEMETRY_CATEGORIES.includes(key)) throw new Error(`Unknown telemetry category: ${key}`);
@@ -106,11 +106,21 @@ async function inspectGit(cwd) {
 }
 
 async function machineId() {
-  const directory = join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'opencode-supervisor');
+  const config = process.env.XDG_CONFIG_HOME || join(homedir(), '.config');
+  const directory = join(config, 'agentdashboard');
   const path = join(directory, 'machine-id');
+  const legacyPath = join(config, 'opencode-supervisor', 'machine-id');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   try { return (await readFile(path, 'utf8')).trim(); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try {
+    const legacyId = (await readFile(legacyPath, 'utf8')).trim();
+    if (legacyId) {
+      try { await open(path, 'wx', 0o600).then(async file => { try { await file.writeFile(legacyId); } finally { await file.close(); } }); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+      return (await readFile(path, 'utf8')).trim();
+    }
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const id = randomUUID();
   const temporary = join(directory, `.machine-id-${randomUUID()}`);
   const file = await open(temporary, 'wx', 0o600);
@@ -138,8 +148,8 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   let privacy;
   try { privacy = telemetryConfig(); } catch { return {}; }
   let endpoint;
-  try { endpoint = new URL(process.env.OPENCODE_SUPERVISOR_URL || 'http://127.0.0.1:4317'); } catch { return {}; }
-  const token = process.env.OPENCODE_SUPERVISOR_TOKEN;
+  try { endpoint = new URL(process.env.AGENTDASHBOARD_URL || 'http://127.0.0.1:4317'); } catch { return {}; }
+  const token = process.env.AGENTDASHBOARD_TOKEN;
   // Without a secret, telemetry must never leave this computer.
   if (!['http:', 'https:'].includes(endpoint.protocol)) return {};
   if (!token) {
@@ -194,7 +204,7 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
       if (privacy.git && Date.now() - lastGit > 10000) { gitInfo = await inspectGit(directory); lastGit = Date.now(); }
       const response = await fetch(new URL('/api/report', endpoint), {
         method: 'POST', redirect: 'error', headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'content-type': 'application/json' },
-        body: JSON.stringify(privateReport({ instanceId, machineId: machine, generationStartedAt, host: process.env.OPENCODE_SUPERVISOR_HOST || hostname(), pid: process.pid,
+        body: JSON.stringify(privateReport({ instanceId, machineId: machine, generationStartedAt, host: process.env.AGENTDASHBOARD_HOST || hostname(), pid: process.pid,
           directory, worktree, sessions: [...sessions.values()], git: gitInfo, events: activityEvents.snapshot() }, privacy)), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {

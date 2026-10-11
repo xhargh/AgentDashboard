@@ -16,7 +16,7 @@ const env = {
   XDG_DATA_HOME: join(dir, 'data'),
   XDG_CACHE_HOME: join(dir, 'cache'),
   XDG_STATE_HOME: join(dir, 'state'),
-  OPENCODE_SUPERVISOR_TOKEN: token,
+  AGENTDASHBOARD_TOKEN: token,
   OPENCODE_SERVER_PASSWORD: '',
   OPENCODE_CONFIG: '',
   OPENCODE_CONFIG_CONTENT: '{}',
@@ -54,7 +54,7 @@ function instanceFor(instances, instanceId) {
 async function startOpenCode() {
   let output = '';
   child = spawn('opencode', ['serve', '--hostname', '127.0.0.1', '--port', '0'], {
-    cwd: dir, env: { ...env, OPENCODE_SUPERVISOR_URL: url }, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: dir, env: { ...env, AGENTDASHBOARD_URL: url }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.on('error', error => { output += error.message; });
   child.stdout.on('data', chunk => { output += chunk; });

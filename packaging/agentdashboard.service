@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/OpenCodeSupervisor
-ExecStart=/usr/bin/node %h/OpenCodeSupervisor/src/server.js
-EnvironmentFile=%h/.config/opencode-supervisor/environment
+WorkingDirectory=%h/AgentDashboard
+ExecStart=/usr/bin/node %h/AgentDashboard/src/server.js
+EnvironmentFile=%h/.config/agentdashboard/environment
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

@@ -22,7 +22,7 @@ From this checkout, start the companion with no token configured:
 npm start
 ```
 
-Open **http://127.0.0.1:4317**. The dashboard connects automatically without a login. Without `SUPERVISOR_TOKEN`, the companion always binds to `127.0.0.1`, ignoring `HOST`, and accepts only local connections. It also checks the request hostname and browser origin. Do not forward or proxy this unauthenticated mode to other computers; use network mode for that.
+Open **http://127.0.0.1:4317**. The dashboard connects automatically without a login. Without `AGENTDASHBOARD_TOKEN`, the companion always binds to `127.0.0.1`, ignoring the configured host, and accepts only local connections. It also checks the request hostname and browser origin. Do not forward or proxy this unauthenticated mode to other computers; use network mode for that.
 
 Install the plugin, then start OpenCode in your project:
 
@@ -32,7 +32,7 @@ cd /path/to/your/project
 opencode
 ```
 
-No plugin token or URL is needed for the default local setup. If switching from network mode, remove `SUPERVISOR_TOKEN` from `.env` and unset it in the companion shell. Remove/unset `OPENCODE_SUPERVISOR_TOKEN` and any remote `OPENCODE_SUPERVISOR_URL` in the OpenCode shell. Restart both processes after changing their configuration. Without a token, the plugin only reports to loopback addresses and will not follow redirects.
+No plugin token or URL is needed for the default local setup. If switching from network mode, remove the token from `.env` and unset it in the companion shell. Remove/unset the plugin token and any remote plugin URL in the OpenCode shell. Restart both processes after changing their configuration. Without a token, the plugin only reports to loopback addresses and will not follow redirects.
 
 `npm start` loads `.env` automatically; no sourcing is needed. Exported shell variables take precedence over `.env`. Direct `node src/server.js` and the systemd service use their process environment. A nonempty token shorter than 24 characters is a configuration error, not a fallback to local mode.
 
@@ -49,20 +49,20 @@ Use one installation scope per project to avoid loading two copies. The installe
 Choose one computer to run the companion. Generate a shared secret with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`, then configure it on that machine:
 
 ```bash
-export SUPERVISOR_TOKEN='your-generated-secret'
-HOST=0.0.0.0 PORT=4317 npm start
+export AGENTDASHBOARD_TOKEN='your-generated-secret'
+AGENTDASHBOARD_HOST=0.0.0.0 AGENTDASHBOARD_PORT=4317 npm start
 ```
 
-A valid `SUPERVISOR_TOKEN` enables network mode and defaults to `HOST=0.0.0.0`; you can set `HOST` to a particular interface or loopback. Settings can also be placed in `.env`. The browser asks for the shared token when connecting.
+A valid `AGENTDASHBOARD_TOKEN` enables network mode and defaults to `AGENTDASHBOARD_HOST=0.0.0.0`; you can set the host to a particular interface or loopback. Settings can also be placed in `.env`. The browser asks for the shared token when connecting.
 
 Allow inbound TCP port 4317 from your LAN using your firewall. On every monitored computer, copy this repository, install the plugin, and configure OpenCode:
 
 ```bash
 npm run install-plugin
-export OPENCODE_SUPERVISOR_URL='http://192.168.1.10:4317'
-export OPENCODE_SUPERVISOR_TOKEN='your-generated-secret'
+export AGENTDASHBOARD_URL='http://192.168.1.10:4317'
+export AGENTDASHBOARD_TOKEN='your-generated-secret'
 # Optional stable, unique display name; defaults to OS hostname:
-export OPENCODE_SUPERVISOR_HOST='linux-workstation'
+export AGENTDASHBOARD_HOST='linux-workstation'
 opencode
 ```
 
@@ -72,10 +72,10 @@ In network mode, all API requests require the shared bearer token, including das
 
 The report sent to `/api/report` contains an instance UUID, stable machine UUID, host label, process ID, and a session list. Every session includes its ID and status, plus its parent session ID when present. By default it also contains session titles (`titles`), todo text/status (`tasks`), tool/agent activity (`toolActivity`), session/project/worktree paths (`paths`), a Git snapshot (`git`) with repository root, short status, recent commit subjects/dates, and worktree details, and model identifiers/variant/configured context capacity (`modelMetrics`). Git inspection uses bounded, read-only local subprocesses; no remotely supplied shell commands are run. Reports never include conversation prompts, assistant messages or model reasoning, raw tool arguments, or tool outputs. Titles, todo text, activity strings, model/provider identifiers, variants, Git subjects/status, and paths may themselves reveal sensitive information.
 
-Configure plugin privacy with `OPENCODE_SUPERVISOR_TELEMETRY`, a JSON object set in the OpenCode process environment. For example:
+Configure plugin privacy with `AGENTDASHBOARD_TELEMETRY`, a JSON object set in the OpenCode process environment. For example:
 
 ```bash
-export OPENCODE_SUPERVISOR_TELEMETRY='{"titles":false,"tasks":false,"toolActivity":false,"paths":false,"git":false,"modelMetrics":false}'
+export AGENTDASHBOARD_TELEMETRY='{"titles":false,"tasks":false,"toolActivity":false,"paths":false,"git":false,"modelMetrics":false}'
 ```
 
 The available categories are `titles`, `tasks`, `toolActivity`, `paths`, `git`, and `modelMetrics`; each defaults to `true`. Setting a category to `false` removes that category from the JSON report before `fetch` is called. Git snapshots include paths (repository roots, filenames, and worktree locations), so setting `paths` to `false` also disables `git`. `modelMetrics` covers provider/model identifiers, variants, configured context limits, and reported usage counters. Usage totals are per session and sum the last 100 distinct assistant message snapshots; repeated updates replace that message's snapshot, and `partial: true` indicates older messages were evicted. Input, output, reasoning, cache-read, and cache-write are kept separate; no grand total is emitted because providers may report categories with overlapping semantics. The dashboard's lifetime counter is explicitly `input + output`; the breakdown preserves the other reported categories separately. The latest context estimate uses the most recent assistant message's input plus cache-read counters when available and requires a configured context limit. This follows OpenCode's current token fields, where cached input is provided separately as `tokens.cache.read`, but provider accounting may differ. It is an estimate of the last reported request, not a live context measurement or a value derived from lifetime totals; it can fall after compaction. Restored sessions have no lifetime totals until new assistant usage arrives. The status-only profile is `{"profile":"status-only"}` and disables all six categories while retaining host/machine/instance identity, process ID, session IDs, parent relationships, session statuses, and lifecycle timestamps. Configuration must be valid JSON with known boolean categories; invalid settings disable reporting and produce a local diagnostic. Older reports remain accepted, including reports without optional session metadata or Git snapshots.
@@ -88,7 +88,7 @@ Model/provider names, IDs, variants, token counts, and configured context limits
 
 #### Optional real-model verification
 
-The regular test suite and `npm run smoke` do not make inference calls and do not require model credentials. To verify a real completion, configure a provider/model in OpenCode, start the companion, then launch OpenCode with this plugin and the telemetry URL/token environment configured. Prompt a root agent to complete a small task and, if your configured agent supports delegation, to ask a subagent to perform a separate task. Confirm that the dashboard reports each session's own provider/model and final token counters, while no prompt or response text appears in the report. Repeat with `OPENCODE_SUPERVISOR_TELEMETRY='{"modelMetrics":false}'` to confirm the metrics disappear. This check is opt-in because it can incur provider charges and depends on provider-specific reporting; do not make it a CI prerequisite. Record the OpenCode and provider versions with any observed discrepancy.
+The regular test suite and `npm run smoke` do not make inference calls and do not require model credentials. To verify a real completion, configure a provider/model in OpenCode, start the companion, then launch OpenCode with this plugin and the telemetry URL/token environment configured. Prompt a root agent to complete a small task and, if your configured agent supports delegation, to ask a subagent to perform a separate task. Confirm that the dashboard reports each session's own provider/model and final token counters, while no prompt or response text appears in the report. Repeat with `AGENTDASHBOARD_TELEMETRY='{"modelMetrics":false}'` to confirm the metrics disappear. This check is opt-in because it can incur provider charges and depends on provider-specific reporting; do not make it a CI prerequisite. Record the OpenCode and provider versions with any observed discrepancy.
 
 Privacy filtering limits report contents, but does not encrypt a connection. Network mode over plain HTTP exposes both the bearer token and report data to network observers; use HTTPS (for example, a reverse proxy with TLS) or an encrypted private network, and restrict access to a trusted/private network. The default local mode sends only to loopback and requires no token. Avoid exposing the plain HTTP companion directly to the internet.
 
@@ -125,42 +125,44 @@ The native Tauri window could not be launched in the implementation environment:
 
 ## Run as a Linux user service
 
-Copy `packaging/opencode-supervisor.service` into `~/.config/systemd/user/`. Edit its `WorkingDirectory` and `ExecStart` to match this checkout and the output of `command -v node`.
+For a new installation, create `~/.config/agentdashboard/environment` as shown below, then install `packaging/agentdashboard.service` as `~/.config/systemd/user/agentdashboard.service`. Edit the checkout path and Node executable in the unit if needed. For an existing installation, stop and disable the old unit **before** starting the new one. Both units use the same default port, so running both can cause a bind failure or duplicate companion processes. Keep the old environment file; copy it to the new location and rename its variables as described below:
 
-The existing systemd unit name, service filename, environment-file location, plugin filename, configuration directory, and `SUPERVISOR_*`/`OPENCODE_SUPERVISOR_*` variables are retained so existing installations continue to work.
+For an existing installation, first run `systemctl --user disable --now opencode-supervisor`, then copy `~/.config/opencode-supervisor/environment` to `~/.config/agentdashboard/environment` and rename its keys to the `AGENTDASHBOARD_*` names below. Update OpenCode launch environment variables the same way. Legacy environment variable names are no longer read. Once the new service is verified, remove the old unit file from `~/.config/systemd/user/` and reload systemd. The old environment file and configuration directory are not deleted.
 
-Create `~/.config/opencode-supervisor/environment` (keep it readable only by your user):
+Create `~/.config/agentdashboard/environment` (keep it readable only by your user):
 
 ```ini
-SUPERVISOR_TOKEN=your-generated-secret
-HOST=0.0.0.0
-PORT=4317
+AGENTDASHBOARD_TOKEN=your-generated-secret
+AGENTDASHBOARD_HOST=0.0.0.0
+AGENTDASHBOARD_PORT=4317
 ```
 
 Then:
 
 ```bash
-chmod 600 ~/.config/opencode-supervisor/environment
+chmod 600 ~/.config/agentdashboard/environment
+mkdir -p ~/.config/systemd/user
+cp packaging/agentdashboard.service ~/.config/systemd/user/agentdashboard.service
 systemctl --user daemon-reload
-systemctl --user enable --now opencode-supervisor
-journalctl --user -u opencode-supervisor -f
+systemctl --user enable --now agentdashboard
+journalctl --user -u agentdashboard -f
 ```
 
-For token-free local access, leave `SUPERVISOR_TOKEN` empty or omit it from the service environment file. For authenticated local access, keep the token and set `HOST=127.0.0.1`. The user service normally follows your login session; enable user lingering separately if you want it running after logout.
+For token-free local access, leave `AGENTDASHBOARD_TOKEN` empty or omit it from the service environment file. For authenticated local access, keep the token and set `AGENTDASHBOARD_HOST=127.0.0.1`. The user service normally follows your login session; enable user lingering separately if you want it running after logout.
 
 ## Configuration
 
 | Process | Variable | Default |
 |---|---|---|
-| Companion | `SUPERVISOR_TOKEN` | Absent: local mode. Set to 24+ characters for network mode |
-| Companion | `HOST` | No token: forced `127.0.0.1`. With token: `0.0.0.0` |
-| Companion | `PORT` | `4317` |
-| OpenCode | `OPENCODE_SUPERVISOR_TOKEN` | Absent: local reports only. Required for a network companion |
-| OpenCode | `OPENCODE_SUPERVISOR_URL` | `http://127.0.0.1:4317` |
-| OpenCode | `OPENCODE_SUPERVISOR_HOST` | OS hostname |
-| OpenCode | `OPENCODE_SUPERVISOR_TELEMETRY` | All metadata categories enabled; accepts category booleans or `{"profile":"status-only"}` |
+| Companion | `AGENTDASHBOARD_TOKEN` | Absent: local mode. Set to 24+ characters for network mode |
+| Companion | `AGENTDASHBOARD_HOST` | No token: forced `127.0.0.1`. With token: `0.0.0.0` |
+| Companion | `AGENTDASHBOARD_PORT` | `4317` |
+| OpenCode | `AGENTDASHBOARD_TOKEN` | Absent: local reports only. Required for a network companion |
+| OpenCode | `AGENTDASHBOARD_URL` | `http://127.0.0.1:4317` |
+| OpenCode | `AGENTDASHBOARD_HOST` | OS hostname |
+| OpenCode | `AGENTDASHBOARD_TELEMETRY` | All metadata categories enabled; accepts category booleans or `{"profile":"status-only"}` |
 
-The plugin creates a stable machine ID in `$XDG_CONFIG_HOME/opencode-supervisor/machine-id` (or `~/.config/opencode-supervisor/machine-id` when `XDG_CONFIG_HOME` is unset). Each plugin process generation also gets a fresh instance ID. Display hostnames remain configurable and are not used as machine identity. Failed reports retry with exponential jitter from 0.5–60 seconds, without overlapping requests; successful reports reset the delay. Failure diagnostics are secret-free and limited to one per 30 seconds. Authentication/report-configuration errors are labeled separately from server, network, and timeout failures.
+Only the documented `AGENTDASHBOARD_*` environment names are read. Existing settings must be renamed during upgrade: companion `SUPERVISOR_TOKEN` → `AGENTDASHBOARD_TOKEN`, `HOST` → `AGENTDASHBOARD_HOST`, `PORT` → `AGENTDASHBOARD_PORT`; plugin `OPENCODE_SUPERVISOR_URL` → `AGENTDASHBOARD_URL`, `OPENCODE_SUPERVISOR_TOKEN` → `AGENTDASHBOARD_TOKEN`, `OPENCODE_SUPERVISOR_HOST` → `AGENTDASHBOARD_HOST`, and `OPENCODE_SUPERVISOR_TELEMETRY` → `AGENTDASHBOARD_TELEMETRY`. No-token companion mode binds only to loopback, and no-token plugins refuse non-loopback URLs. New machine IDs are stored in `$XDG_CONFIG_HOME/agentdashboard/machine-id` (or `~/.config/agentdashboard/machine-id`). If only the old `opencode-supervisor/machine-id` exists, its value is copied forward without changing or deleting the old ID. Each plugin process generation also gets a fresh instance ID. Display hostnames remain configurable and are not used as machine identity. Failed reports retry with exponential jitter from 0.5–60 seconds, without overlapping requests; successful reports reset the delay. Failure diagnostics are secret-free and limited to one per 30 seconds. Authentication/report-configuration errors are labeled separately from server, network, and timeout failures.
 
 Session state is held in memory. Companion restarts recover from the next plugin heartbeat. Plugin restarts get new instance IDs while retaining the machine ID; old entries remain visibly offline until expiration. Older plugin reports without machine IDs remain accepted and are grouped by hostname. Idle sessions are retained up to a soft 500-session limit per plugin; active sessions are preferred. Companion limits are fixed: 2,000 instances, 1,000 sessions/report and 20,000 aggregate retained sessions, 200 events/report and 10,000 aggregate retained events (for event-enabled reports), 4,096 characters per general string field (200 for event summaries), and 1 MiB/report. Oversized report bodies receive HTTP 413; invalid or overlong fields receive HTTP 400. At fleet capacity, the companion evicts offline/idle instances first and then the oldest; live instances with busy, retrying, or permission-waiting sessions are retained preferentially. If capacity is occupied by retained activity, a report that cannot fit receives HTTP 503. Age-based expiration runs at most once per minute on API traffic rather than scanning the fleet on every request.
 Plugin generations report a stable machine ID, process ID, and generation start time. A newer generation with the same machine ID and process ID marks the prior generation **Replaced**; different process IDs remain separate concurrent instances. Replaced and merely offline instances remain distinguishable and are retained for up to 24 hours.

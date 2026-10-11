@@ -48,7 +48,7 @@ function validReport(v) {
       boundedString(e.summary, LIMITS.summary)));
 }
 export function createServer({ token, now = Date.now } = {}) {
-  if (token && token.length < 24) throw new Error('SUPERVISOR_TOKEN must contain at least 24 characters');
+  if (token && token.length < 24) throw new Error('AGENTDASHBOARD_TOKEN must contain at least 24 characters');
   const instances = new Map();
   let revision = 0;
   let lastPrune = 0;
@@ -162,12 +162,14 @@ export function createServer({ token, now = Date.now } = {}) {
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const token = process.env.SUPERVISOR_TOKEN;
-    const host = token ? (process.env.HOST || '0.0.0.0') : '127.0.0.1';
+    const token = process.env.AGENTDASHBOARD_TOKEN;
+    const configuredHost = process.env.AGENTDASHBOARD_HOST;
+    const configuredPort = process.env.AGENTDASHBOARD_PORT;
+    const host = token ? (configuredHost || '0.0.0.0') : '127.0.0.1';
     const server = createServer({ token });
     server.requestTimeout = 10000;
     server.on('error', error => { console.error(`Companion failed: ${error.message}`); process.exitCode = 1; });
-    server.listen(Number(process.env.PORT || 4317), host, () => console.log(`AgentDashboard ${token ? 'network (token required)' : 'local (no token)'} mode listening on ${host}:${process.env.PORT || 4317}`));
+    server.listen(Number(configuredPort || 4317), host, () => console.log(`AgentDashboard ${token ? 'network (token required)' : 'local (no token)'} mode listening on ${host}:${configuredPort || 4317}`));
     for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { server.close(); server.closeAllConnections(); });
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
