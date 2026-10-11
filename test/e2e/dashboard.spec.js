@@ -291,7 +291,7 @@ test('renders status-only instances without optional metadata', async ({ page })
   }] }));
   await page.goto('/');
 
-  await expect(page.locator('#fleet').getByText('private-host', { exact: true })).toBeVisible();
+  await expect(page.locator('#fleet').getByText('private-host · unknown path · 42', { exact: true })).toBeVisible();
   await expect(page.getByText('Session', { exact: true })).toBeVisible();
   await expect(page.locator('#fleet .badge')).toHaveText('busy');
   await expect(page.getByText('undefined', { exact: true })).toHaveCount(0);
