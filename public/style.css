@@ -43,8 +43,7 @@ code { color: var(--muted); overflow-wrap: anywhere; }
 .header-inner { max-width: 1240px; margin: auto; padding: 18px 40px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .wordmark { display: flex; align-items: center; gap: 11px; }
 .wordmark > strong { font-size: 15px; font-weight: 650; letter-spacing: -.5px; }
-.brand { display: inline-flex; align-items: center; justify-content: center; position: relative; width: 30px; height: 30px; border-radius: 9px; background: #223930; color: var(--accent); font-size: 25px; font-weight: 650; line-height: 1; letter-spacing: -2px; padding-bottom: 4px; }
-.brand > span { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); position: absolute; right: 5px; top: 6px; }
+.brand { display: block; width: 30px; height: 30px; border-radius: 9px; }
 .workspace-label { margin-left: 10px; padding-left: 20px; border-left: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 #connection { font-size: 11px; color: var(--muted); padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--raised); }
 #connection[data-state="connected"] { color: var(--accent); background: #20352c; border-color: #304d3f; }

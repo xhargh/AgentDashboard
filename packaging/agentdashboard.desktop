@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=AgentDashboard
+Comment=Monitor OpenCode agent activity
+Exec=AgentDashboard
+Icon=agentdashboard
+Terminal=false
+Categories=Development;Utility;
+StartupWMClass=AgentDashboard
