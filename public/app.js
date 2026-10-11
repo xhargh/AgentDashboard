@@ -1,6 +1,9 @@
 import { buildSessionTree, classifySessions, isActiveCategory, isFinishedSubagentHidden, sessionMatchesSearch, sessionState } from './session-state.js';
 const $ = id => document.getElementById(id);
 let token = '', instances = [], revision = null, pending = false, authRequired = false;
+let notificationEnabled = false, initializedAttention = false;
+const previousStatuses = new Map();
+const originalTitle = document.title;
 const machineKey = i => i.machineId || `legacy:${i.host}`;
 const expandedAgents = new Set();
 const expandedActivity = new Set();
@@ -130,6 +133,29 @@ function render() {
     fleet.append(empty);
   }
 }
+function updateAttentionNotifications(nextInstances) {
+  const live = nextInstances.filter(i => i.online);
+  let count = 0;
+  const currentStatuses = new Map();
+  for (const instance of live) {
+    for (const session of instance.sessions) {
+      const identity = `${instance.instanceId}:${session.id}`;
+      currentStatuses.set(identity, session.status);
+      const attention = session.status === 'waiting' || session.status === 'error';
+      if (attention) count++;
+      const previous = previousStatuses.get(identity);
+      if (initializedAttention && attention && previous !== undefined && previous !== session.status) {
+        if (notificationEnabled && 'Notification' in window && Notification.permission === 'granted') {
+          try { new Notification(session.status === 'waiting' ? 'Permission required' : 'Agent error', { body: `${session.title} · ${instance.host}` }); } catch {}
+        }
+      }
+    }
+  }
+  previousStatuses.clear();
+  for (const [identity, status] of currentStatuses) previousStatuses.set(identity, status);
+  initializedAttention = true;
+  if ($('tab-count')?.checked) document.title = count ? `(${count}) ${originalTitle}` : originalTitle;
+}
 async function poll() {
   if ((authRequired && !token) || pending) return;
   pending = true;
@@ -149,14 +175,31 @@ async function poll() {
     if (!response.ok) throw new Error(`Companion returned ${response.status}`);
     const data = await response.json(); if (token !== usedToken) return;
     authRequired = data.mode !== 'local';
+    updateAttentionNotifications(data.instances);
     revision = data.revision; instances = data.instances; $('login').hidden = true; $('dashboard').hidden = false; $('logout').hidden = !authRequired;
     $('connection').textContent = authRequired ? '● Connected · network mode' : '● Connected · local only'; $('error').textContent = ''; render();
     document.querySelectorAll('details[data-instance]').forEach(n => n.open = open.has(n.dataset.instance));
-  } catch (e) { revision = null; $('connection').textContent = '○ Disconnected · retrying'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
+  } catch (e) { revision = null; initializedAttention = false; previousStatuses.clear(); $('connection').textContent = '○ Disconnected · retrying'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
   finally { pending = false; }
 }
 $('login').addEventListener('submit', e => { e.preventDefault(); token = $('token').value.trim(); $('token').value = ''; void poll(); });
 $('logout').onclick = () => { token = ''; revision = null; instances = []; $('dashboard').hidden = true; $('login').hidden = false; $('logout').hidden = true; $('connection').textContent = 'Disconnected'; };
 for (const id of ['host', 'search', 'active', 'hide-finished', 'hide-waiting', 'hide-offline']) $(id).addEventListener('input', render);
+$('notifications').addEventListener('change', async event => {
+  notificationEnabled = event.target.checked;
+  if (!notificationEnabled) return;
+  if (!('Notification' in window)) { event.target.checked = false; notificationEnabled = false; $('notifications-help').textContent = 'Browser notifications are not supported in this browser.'; return; }
+  if (Notification.permission === 'default') {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') { event.target.checked = false; notificationEnabled = false; }
+  } else if (Notification.permission !== 'granted') { event.target.checked = false; notificationEnabled = false; }
+});
+$('tab-count').addEventListener('change', () => {
+  if (!$('tab-count').checked) document.title = originalTitle;
+  else {
+    const count = instances.filter(i => i.online).flatMap(i => i.sessions).filter(s => s.status === 'waiting' || s.status === 'error').length;
+    document.title = count ? `(${count}) ${originalTitle}` : originalTitle;
+  }
+});
 void poll();
 setInterval(poll, 2000);

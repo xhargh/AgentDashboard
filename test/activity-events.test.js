@@ -21,7 +21,7 @@ test('activity history is bounded by count and age', () => {
 });
 
 test('event schema allowlists kinds and fixed summaries, never caller content', () => {
-  const buffer = createActivityBuffer();
+  const buffer = createActivityBuffer({ now: () => Date.parse('2026-10-10T00:00:00Z') });
   buffer.record('session', 'waiting', '2026-10-10T00:00:00Z', 'prompt/tool output secret');
   buffer.record('session', 'permission: secret args');
   const events = buffer.snapshot();
