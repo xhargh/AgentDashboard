@@ -147,7 +147,7 @@ function render() {
       if (!i.machineId) {
         card.append(el('p', 'This instance is using a legacy host-based identity because its report has no machine ID. Update or reinstall the OpenCode Supervisor plugin to use a stable machine identity.', 'instance-warning'));
       }
-      const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
+      const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div', undefined, 'session-info');
       info.append(el('strong', s.title || 'Session'), el('p', i.directory ? `${i.host} · ${i.directory}` : i.host, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
        if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
        if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
@@ -170,9 +170,8 @@ function render() {
         }
         activity.append(list);
       }
-      card.append(activity);
       const state = el('div', undefined, 'session-state'), badge = el('span', display.label, `badge ${display.className}`); badge.title = display.detail;
-      state.append(badge, el('small', s.agent || (s.parentID ? 'subagent' : 'agent'))); row.append(info, state); card.append(row);
+      state.append(badge, el('small', s.agent || (s.parentID ? 'subagent' : 'agent'))); row.append(info, state); card.append(row, activity);
       if (i.git?.root && !s.parentID) {
         const details = el('details'); details.dataset.instance = i.instanceId; details.append(el('summary', 'Git workspace'));
         const grid = el('div', undefined, 'git-grid');
@@ -246,6 +245,7 @@ async function poll() {
       revision = null;
       authRequired = true; $('login').hidden = false; $('dashboard').hidden = true; $('logout').hidden = true;
       $('connection').textContent = 'Network mode · token required';
+      $('connection').dataset.state = 'disconnected';
       $('error').textContent = usedToken ? 'Invalid access token' : '';
       token = ''; return;
     }
@@ -257,12 +257,13 @@ async function poll() {
     updateAttentionNotifications(data.instances);
     instances = data.instances; $('login').hidden = true; $('dashboard').hidden = false; $('logout').hidden = !authRequired;
     $('connection').textContent = authRequired ? '● Connected · network mode' : '● Connected · local only'; $('error').textContent = ''; render();
+    $('connection').dataset.state = 'connected';
     document.querySelectorAll('details[data-instance]').forEach(n => n.open = open.has(n.dataset.instance));
-  } catch (e) { revision = null; initializedAttention = false; previousStatuses.clear(); $('connection').textContent = '○ Disconnected · retrying'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
+  } catch (e) { revision = null; initializedAttention = false; previousStatuses.clear(); $('connection').textContent = '○ Disconnected · retrying'; $('connection').dataset.state = 'disconnected'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
   finally { pending = false; }
 }
 $('login').addEventListener('submit', e => { e.preventDefault(); token = $('token').value.trim(); $('token').value = ''; void poll(); });
-$('logout').onclick = () => { token = ''; revision = null; instances = []; $('dashboard').hidden = true; $('login').hidden = false; $('logout').hidden = true; $('connection').textContent = 'Disconnected'; };
+$('logout').onclick = () => { token = ''; revision = null; instances = []; $('dashboard').hidden = true; $('login').hidden = false; $('logout').hidden = true; $('connection').textContent = 'Disconnected'; $('connection').dataset.state = 'disconnected'; };
 for (const id of ['host', 'search', 'active', 'hide-finished', 'hide-waiting', 'hide-offline']) $(id).addEventListener('input', render);
 $('notifications').addEventListener('change', async event => {
   notificationEnabled = event.target.checked;
