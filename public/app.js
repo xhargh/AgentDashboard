@@ -59,6 +59,7 @@ function render() {
   reconcile($('metrics'), metrics);
   const selected = $('host').value;
   const machines = new Map(instances.map(i => [machineKey(i), i]));
+  $('computer-filter').hidden = !authRequired && machines.size < 2;
   const options = [...machines].sort((a, b) => a[1].host.localeCompare(b[1].host)).map(([key, i]) =>
     new Option(instances.filter(other => other.host === i.host).length > 1 ? `${i.host} (${key.slice(0, 8)})` : i.host, key));
   if (!$('host').options || $('host').options.length !== options.length + 1 || options.some((option, index) => $('host').options[index + 1]?.value !== option.value)) {
