@@ -495,7 +495,7 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
     await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory } } });
   }
 });
-test('plugin classifies HTTP, network, and timeout report failures without leaking details', async t => {
+test('plugin keeps HTTP, network, and timeout failures out of client output', async t => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   const oldUrl = process.env.OPENCODE_SUPERVISOR_URL;
@@ -511,13 +511,8 @@ test('plugin classifies HTTP, network, and timeout report failures without leaki
   process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
   process.env.OPENCODE_SUPERVISOR_TOKEN = 'secret-token-that-must-not-be-logged';
 
-  const cases = [
-    [401, 'authentication (HTTP 401)'], [403, 'authentication (HTTP 403)'],
-    [400, 'rejected report (HTTP 400)'], [413, 'rejected report (HTTP 413)'],
-    [500, 'server failure (HTTP 500)'], [503, 'server failure (HTTP 503)'],
-    ['network', 'network failure'], ['timeout', 'timeout'],
-  ];
-  for (const [failure, expected] of cases) {
+  const cases = [401, 403, 400, 413, 500, 503, 'network', 'timeout'];
+  for (const failure of cases) {
     const warnings = [];
     console.warn = message => warnings.push(message);
     globalThis.fetch = async () => {
@@ -528,14 +523,12 @@ test('plugin classifies HTTP, network, and timeout report failures without leaki
       return new Response('private response body', { status: failure });
     };
     const plugin = await AgentDashboardPlugin({ directory: '/tmp' });
-    for (let n = 0; n < 100 && warnings.length === 0; n++) await new Promise(resolve => setTimeout(resolve, 5));
-    assert.equal(warnings.length, 1, `${failure} should produce one diagnostic`);
-    assert.match(warnings[0], new RegExp(expected.replace(/[()]/g, '\\$&')));
-    assert.doesNotMatch(warnings[0], /secret-token|private/);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(warnings, [], `${failure} should not print plugin diagnostics`);
     await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } });
   }
 });
-test('plugin backs off repeated failures, rate-limits diagnostics, and recovers on retry', async t => {
+test('plugin backs off repeated failures and recovers on retry without client output', async t => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   const old = Object.fromEntries(['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
@@ -559,11 +552,11 @@ test('plugin backs off repeated failures, rate-limits diagnostics, and recovers 
   t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
   for (let n = 0; n < 100 && requests < 2; n++) await new Promise(resolve => setTimeout(resolve, 50));
   assert.ok(requests >= 2 && requests <= 5, `unexpected retry count ${requests}`);
-  assert.equal(warnings.length, 1);
+  assert.deepEqual(warnings, []);
   recovered = true;
   for (let n = 0; n < 100 && requests < 3; n++) await new Promise(resolve => setTimeout(resolve, 50));
   assert.ok(requests >= 3, 'retry should recover after the endpoint becomes available');
-  assert.equal(warnings.length, 1);
+  assert.deepEqual(warnings, []);
 });
 test('local mode allows token-free reports and rejects remote peers, rebinding and foreign origins', async t => {
   const { dispatch } = await start(t, { token: undefined });
