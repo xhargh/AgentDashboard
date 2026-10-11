@@ -75,6 +75,69 @@ test('accepts reports with privacy-filtered optional metadata', async t => {
   assert.equal(state.instances[0].sessions[0].title, undefined);
   assert.equal(state.instances[0].git, undefined);
 });
+test('reports assistant model metadata per session and filters it at the outbound boundary', async t => {
+  const originalFetch = globalThis.fetch;
+  const keys = ['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_TELEMETRY', 'XDG_CONFIG_HOME'];
+  const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const root = await mkdtemp(join(tmpdir(), 'supervisor-model-'));
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(root, { recursive: true, force: true });
+  });
+  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
+  process.env.OPENCODE_SUPERVISOR_TOKEN = token;
+  process.env.XDG_CONFIG_HOME = root;
+  const reports = [];
+  globalThis.fetch = async (_url, init) => { reports.push(JSON.parse(init.body)); return new Response('', { status: 200 }); };
+  const client = { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) }, config: { providers: async () => ({ data: { providers: [
+    { id: 'provider-a', models: { 'model-x': { name: 'Friendly Model', limit: { context: 128000 } } } },
+  ] } }) } };
+  const plugin = await AgentDashboardPlugin({ directory: '/tmp', client });
+  t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
+  await plugin.event({ event: { type: 'message.updated', properties: { info: {
+    id: 'message-1', sessionID: 'parent', role: 'assistant', providerID: 'provider-a', modelID: 'model-x', variant: 'high',
+  } } } });
+  await plugin.event({ event: { type: 'message.updated', properties: { info: {
+    id: 'message-2', sessionID: 'child', role: 'assistant', providerID: 'provider-b', modelID: 'model-y',
+  } } } });
+  for (let n = 0; n < 100 && !reports.some(r => r.sessions.some(s => s.id === 'child')); n++) await new Promise(resolve => setTimeout(resolve, 10));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sessions = reports.at(-1).sessions;
+  assert.deepEqual(sessions.find(s => s.id === 'parent').model, {
+    providerID: 'provider-a', modelID: 'model-x', variant: 'high', name: 'Friendly Model', contextLimit: 128000,
+  });
+  assert.deepEqual(sessions.find(s => s.id === 'child').model, { providerID: 'provider-b', modelID: 'model-y' });
+
+  process.env.OPENCODE_SUPERVISOR_TELEMETRY = '{"modelMetrics":false}';
+  const filtered = await AgentDashboardPlugin({ directory: '/tmp', client });
+  t.after(() => filtered.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
+  await filtered.event({ event: { type: 'message.updated', properties: { info: {
+    sessionID: 'private', role: 'assistant', providerID: 'private-provider', modelID: 'private-model', variant: 'private-variant',
+  } } } });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(!JSON.stringify(reports.at(-1)).includes('private-provider'));
+
+  process.env.OPENCODE_SUPERVISOR_TELEMETRY = '{"profile":"status-only"}';
+  const statusOnly = await AgentDashboardPlugin({ directory: '/tmp', client });
+  t.after(() => statusOnly.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
+  await statusOnly.event({ event: { type: 'message.updated', properties: { info: {
+    sessionID: 'minimal', role: 'assistant', providerID: 'private-provider', modelID: 'private-model',
+  } } } });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(!JSON.stringify(reports.at(-1)).includes('private-model'));
+});
+
+test('validates optional model metadata while accepting legacy sessions', async t => {
+  const { request } = await start(t);
+  const value = report();
+  value.sessions[0].model = { providerID: 'provider', modelID: 'model', variant: 'high', contextLimit: 200000 };
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 200);
+  value.sessions[0].model.contextLimit = -1;
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 400);
+  delete value.sessions[0].model;
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 200);
+});
 test('reconciles same-process generations without merging concurrent instances', async t => {
   let time = 1000;
   const { request } = await start(t, { now: () => time });

@@ -11,6 +11,13 @@ function equal(a, b) { const x = Buffer.from(a || ''), y = Buffer.from(b); retur
 const LIMITS = Object.freeze({ instances: 2000, sessionsPerReport: 1000, sessionsTotal: 20000,
   eventsPerReport: 200, eventsTotal: 10000, field: 4096, summary: 200, pruneInterval: 60000 });
 function boundedString(value, max = LIMITS.field) { return typeof value === 'string' && value.length <= max; }
+function validModel(model) {
+  return model && typeof model === 'object' && !Array.isArray(model) &&
+    boundedString(model.providerID, 200) && boundedString(model.modelID, 200) &&
+    (model.variant === undefined || boundedString(model.variant, 200)) &&
+    (model.name === undefined || boundedString(model.name, 200)) &&
+    (model.contextLimit === undefined || Number.isSafeInteger(model.contextLimit) && model.contextLimit >= 0);
+}
 function validReport(v) {
   return v && typeof v.instanceId === 'string' && v.instanceId.length <= 100 &&
     (v.machineId === undefined || boundedString(v.machineId, 100)) && boundedString(v.host, 200) &&
@@ -19,7 +26,8 @@ function validReport(v) {
     (v.directory === undefined || boundedString(v.directory)) &&
     Array.isArray(v.sessions) && v.sessions.length <= LIMITS.sessionsPerReport && v.sessions.every(s => s && boundedString(s.id, 200) &&
       boundedString(s.status, 40) && (s.title === undefined || boundedString(s.title)) && (s.directory === undefined || boundedString(s.directory)) &&
-      (s.activity === undefined || boundedString(s.activity)) && (s.agent === undefined || boundedString(s.agent, 200)) &&
+       (s.activity === undefined || boundedString(s.activity)) && (s.agent === undefined || boundedString(s.agent, 200)) &&
+       (s.model === undefined || validModel(s.model)) &&
       (s.parentID === undefined || boundedString(s.parentID, 200)) && (s.todos === undefined || Array.isArray(s.todos) && s.todos.length <= 200 &&
         s.todos.every(todo => todo && boundedString(todo.content) && boundedString(todo.status, 40)))) &&
     (v.git === undefined || v.git && typeof v.git === 'object' && !Array.isArray(v.git) &&

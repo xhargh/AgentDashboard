@@ -8,7 +8,7 @@ import { createSession, markActivity, markState } from './session-lifecycle.js';
 import { createActivityBuffer } from './activity-events.js';
 const exec = promisify(execFile);
 
-const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git'];
+const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics'];
 function telemetryConfig(value = process.env.OPENCODE_SUPERVISOR_TELEMETRY) {
   if (value === undefined || value === '') return Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, true]));
   let config;
@@ -16,7 +16,7 @@ function telemetryConfig(value = process.env.OPENCODE_SUPERVISOR_TELEMETRY) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('OPENCODE_SUPERVISOR_TELEMETRY must be an object');
   if (config.profile !== undefined && config.profile !== 'status-only') throw new Error('Unknown telemetry profile');
   for (const key of Object.keys(config)) {
-    if (key !== 'profile' && !TELEMETRY_CATEGORIES.includes(key)) throw new Error(`Unknown telemetry category: ${key}`);
+  if (key !== 'profile' && !TELEMETRY_CATEGORIES.includes(key)) throw new Error(`Unknown telemetry category: ${key}`);
     if (key !== 'profile' && typeof config[key] !== 'boolean') throw new Error(`Telemetry category ${key} must be boolean`);
   }
   const categories = config.profile === 'status-only'
@@ -35,6 +35,7 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
     if (privacy.toolActivity && session.activity) result.activity = session.activity;
     if (privacy.toolActivity && session.agent) result.agent = session.agent;
     if (privacy.tasks && session.todos) result.todos = session.todos;
+    if (privacy.modelMetrics && session.model) result.model = session.model;
     return result;
   }) };
   if (events?.length) report.events = events;
@@ -124,6 +125,23 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   const generationStartedAt = Date.now();
   const machine = await machineId();
   const sessions = new Map();
+  let providerModels;
+  let providerModelsLoaded = false;
+  const loadProviderModels = async () => {
+    if (providerModelsLoaded) return providerModels;
+    providerModelsLoaded = true;
+    try {
+      const response = await Promise.race([client.config.providers(), new Promise((_, reject) => {
+        const timer = setTimeout(() => reject(new Error('timeout')), 1500); timer.unref?.();
+      })]);
+      const providers = response?.data?.providers || response?.providers || [];
+      providerModels = new Map();
+      for (const provider of providers) for (const [id, model] of Object.entries(provider.models || {})) {
+        providerModels.set(`${provider.id}:${id}`, { name: model.name, contextLimit: model.limit?.context });
+      }
+    } catch { providerModels = undefined; }
+    return providerModels;
+  };
   const activityEvents = createActivityBuffer();
   let gitInfo = {}, lastGit = 0, sending = false, stopped = false, dirty = false, eventTimer;
   let retryTimer, failures = 0, nextAttempt = 0, lastDiagnostic = 0;
@@ -222,6 +240,18 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
       if (event.type === 'message.updated' && p.info?.sessionID) {
         const s = session(p.info.sessionID); s.agent = p.info.agent || p.info.mode || s.agent;
         if (p.info.path?.cwd) s.directory = p.info.path.cwd;
+        if (p.info.role === 'assistant' && typeof p.info.providerID === 'string' && typeof p.info.modelID === 'string') {
+          const model = { providerID: p.info.providerID.slice(0, 200), modelID: p.info.modelID.slice(0, 200) };
+          if (typeof p.info.variant === 'string') model.variant = p.info.variant.slice(0, 200);
+          s.model = model;
+          void loadProviderModels().then(models => {
+            const configured = models?.get(`${model.providerID}:${model.modelID}`);
+            if (!configured || s.model !== model) return;
+            if (typeof configured.name === 'string') model.name = configured.name.slice(0, 200);
+            if (Number.isSafeInteger(configured.contextLimit) && configured.contextLimit >= 0) model.contextLimit = configured.contextLimit;
+            scheduleReport();
+          });
+        }
         markActivity(s);
       }
       if (event.type === 'message.part.updated' && p.part?.type === 'tool') {
