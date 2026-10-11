@@ -303,6 +303,10 @@ function updateAttentionNotifications(nextInstances) {
   initializedAttention = true;
   if ($('tab-count')?.checked) document.title = count ? `(${count}) ${originalTitle}` : originalTitle;
 }
+function updateTrayStatus(status) {
+  const invoke = globalThis.__TAURI__?.core?.invoke;
+  if (invoke) void invoke('update_tray_status', { status }).catch(() => {});
+}
 async function poll() {
   if ((authRequired && !token) || pending) return;
   pending = true;
@@ -329,8 +333,12 @@ async function poll() {
     instances = data.instances; $('login').hidden = true; $('dashboard').hidden = false; $('logout').hidden = !authRequired;
     $('connection').textContent = authRequired ? '● Connected · network mode' : '● Connected · local only'; $('error').textContent = ''; render();
     $('connection').dataset.state = 'connected';
+    const online = instances.filter(instance => instance.online);
+    const sessions = online.flatMap(instance => instance.sessions || []);
+    const attention = sessions.filter(session => ['waiting', 'error'].includes(session.status)).length;
+    updateTrayStatus(`AgentDashboard · ${online.length} instance${online.length === 1 ? '' : 's'} · ${sessions.length} sessions${attention ? ` · ${attention} need attention` : ''}`);
     document.querySelectorAll('details[data-instance]').forEach(n => n.open = open.has(n.dataset.instance));
-  } catch (e) { revision = null; initializedAttention = false; previousStatuses.clear(); $('connection').textContent = '○ Disconnected · retrying'; $('connection').dataset.state = 'disconnected'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
+  } catch (e) { revision = null; initializedAttention = false; previousStatuses.clear(); $('connection').textContent = '○ Disconnected · retrying'; $('connection').dataset.state = 'disconnected'; $('error').textContent = e.message; updateTrayStatus('AgentDashboard · Disconnected'); if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
   finally { pending = false; }
 }
 $('login').addEventListener('submit', e => { e.preventDefault(); token = $('token').value.trim(); $('token').value = ''; void poll(); });

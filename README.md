@@ -94,7 +94,7 @@ Privacy filtering limits report contents, but does not encrypt a connection. Net
 
 ## Desktop window prototype (Linux)
 
-The optional Tauri prototype opens the dashboard in a native AgentDashboard window at `http://127.0.0.1:4317`. Start the companion separately first (`npm start` from this checkout); the desktop window does not launch or stop it. The wrapper navigates directly to the companion, so the dashboard and its `/api/state` requests retain the companion's HTTP loopback origin. No local-mode security checks have been changed to accommodate the webview.
+The optional Tauri prototype opens the dashboard in a native AgentDashboard window at `http://127.0.0.1:4317`. Start the companion separately first (`npm start` from this checkout); the desktop window does not launch or stop it. The wrapper navigates directly to the companion, so the dashboard and its `/api/state` requests retain the companion's HTTP loopback origin. No local-mode security checks have been changed to accommodate the webview. A branded system-tray icon toggles the window on a left click and its tooltip summarizes online instances, sessions, and sessions needing attention. Tooltip availability and presentation depend on the desktop environment; environments without tray support continue with the window alone.
 
 Build a Linux x86_64 executable with Docker BuildKit (no host Rust, Tauri CLI, Node.js, or webview development packages required):
 
