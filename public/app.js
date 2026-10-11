@@ -20,7 +20,11 @@ function gitSummary(git) {
   const worktrees = typeof git.worktrees === 'string' ? (git.worktrees.match(/^worktree /gm) || []).length : null;
   const commitDate = typeof git.log === 'string' ? git.log.split('\n')[0]?.split(/\s+/)[1] : null;
   const lastCommit = commitDate && Number.isFinite(Date.parse(commitDate)) ? formatTimestamp(commitDate) : 'unavailable';
-  return `Git workspace · ${changes ?? 'unavailable'} change${changes === 1 ? '' : 's'} · ${worktrees ?? 'unavailable'} worktrees · last commit ${lastCommit}`;
+  const changeSummary = changes === 0 ? 'clean' : `${changes ?? 'unavailable'} change${changes === 1 ? '' : 's'}`;
+  const worktreeSummary = worktrees === null || worktrees > 1
+    ? `${worktrees ?? 'unavailable'} worktrees`
+    : '';
+  return ['Git workspace', changeSummary, worktreeSummary, `last commit ${lastCommit}`].filter(Boolean).join(' · ');
 }
 function reconcile(parent, desired) {
   if (!parent.querySelectorAll) { parent.replaceChildren(...desired.children); return; }

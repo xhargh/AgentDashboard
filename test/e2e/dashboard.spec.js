@@ -156,6 +156,16 @@ test('folded Git workspace summarizes changes, worktrees, and last commit', asyn
   await expect(workspace).not.toHaveAttribute('open', '');
 });
 
+test('clean single-worktree summary omits zero changes and worktree count', async ({ page }) => {
+  const state = report();
+  state.instances[0].git.status = '## main';
+  state.instances[0].git.worktrees = 'worktree /work/alpha/app\nHEAD abc123\nbranch refs/heads/main';
+  await installStateFixture(page, () => state);
+  await page.goto('/');
+  const workspace = page.locator('details[data-instance="instance-alpha"]').first();
+  await expect(workspace.locator(':scope > summary')).toHaveText('Git workspace · clean · last commit 2026-01-02 03:04');
+});
+
 test('local mode hides the computer filter when only one computer is reported', async ({ page }) => {
   const state = report();
   state.instances = [state.instances[0]];
