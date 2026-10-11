@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Readable } from 'node:stream';
 import { createServer } from '../src/server.js';
-import { retryDelay, SupervisorPlugin } from '../src/plugin.js';
+import { retryDelay, AgentDashboardPlugin } from '../src/plugin.js';
 const token = 'test-token-with-at-least-24-characters';
 async function start(t, options = {}) {
   const server = createServer({ token, ...options });
@@ -191,7 +191,7 @@ test('machine identity persists across plugin generations and distinguishes mach
   const client = { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } };
   const runAt = async config => {
     process.env.XDG_CONFIG_HOME = config;
-    const plugin = await SupervisorPlugin({ directory: '/tmp', client });
+    const plugin = await AgentDashboardPlugin({ directory: '/tmp', client });
     plugins.push(plugin);
     return plugin;
   };
@@ -237,7 +237,7 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   const originalFetch = globalThis.fetch; globalThis.fetch = dispatch; t.after(() => { globalThis.fetch = originalFetch; });
   process.env.OPENCODE_SUPERVISOR_URL = url; process.env.OPENCODE_SUPERVISOR_TOKEN = local ? '' : token;
   t.after(() => { delete process.env.OPENCODE_SUPERVISOR_URL; delete process.env.OPENCODE_SUPERVISOR_TOKEN; });
-  const plugin = await SupervisorPlugin({ directory: dir, worktree: dir, client: { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } } });
+  const plugin = await AgentDashboardPlugin({ directory: dir, worktree: dir, client: { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } } });
   t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: dir } } }));
   async function emit(type, properties) { await plugin.event({ event: { type, properties } }); }
   async function waitFor(predicate) { for (let n = 0; n < 100; n++) { const state = await (await request('/api/state')).json(); if (predicate(state.instances[0])) return state.instances[0]; await new Promise(r => setTimeout(r, 60)); } throw new Error('Report not received'); }
@@ -268,7 +268,7 @@ test('plugin refuses remote telemetry without a token', async t => {
   const old = process.env.OPENCODE_SUPERVISOR_URL;
   t.after(() => { if (old === undefined) delete process.env.OPENCODE_SUPERVISOR_URL; else process.env.OPENCODE_SUPERVISOR_URL = old; });
   process.env.OPENCODE_SUPERVISOR_URL = 'http://192.168.1.10:4317';
-  assert.deepEqual(await SupervisorPlugin({ directory: '/tmp' }), {});
+  assert.deepEqual(await AgentDashboardPlugin({ directory: '/tmp' }), {});
 });
 test('status-only telemetry strips metadata before transmission and validates settings', async t => {
   const originalFetch = globalThis.fetch;
@@ -285,7 +285,7 @@ test('status-only telemetry strips metadata before transmission and validates se
   process.env.OPENCODE_SUPERVISOR_TELEMETRY = '{"profile":"status-only"}';
   process.env.XDG_CONFIG_HOME = root;
   globalThis.fetch = async (_url, init) => { sent = JSON.parse(init.body); return new Response('', { status: 200 }); };
-  const plugin = await SupervisorPlugin({ directory: '/private/project', worktree: '/private/worktree', client: { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } } });
+  const plugin = await AgentDashboardPlugin({ directory: '/private/project', worktree: '/private/worktree', client: { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } } });
   t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/private/project' } } }));
   await plugin.event({ event: { type: 'session.created', properties: { info: { id: 'session', title: 'Secret title', directory: '/private/project' } } } });
   for (let n = 0; n < 100 && !sent?.sessions?.length; n++) await new Promise(resolve => setTimeout(resolve, 20));
@@ -298,7 +298,7 @@ test('status-only telemetry strips metadata before transmission and validates se
   assert.equal(sent.machineId.length > 0, true);
   assert.deepEqual(await (async () => {
     process.env.OPENCODE_SUPERVISOR_TELEMETRY = '{"unknown":false}';
-    return SupervisorPlugin({ directory: '/tmp' });
+    return AgentDashboardPlugin({ directory: '/tmp' });
   })(), {});
 });
 test('each telemetry privacy category is filtered from the outgoing report payload', async t => {
@@ -330,7 +330,7 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
     const reports = [];
     globalThis.fetch = async (_url, init) => { reports.push(JSON.parse(init.body)); return new Response('', { status: 200 }); };
     const directory = root;
-    const plugin = await SupervisorPlugin({ directory, worktree: '/private/worktree', client: {
+    const plugin = await AgentDashboardPlugin({ directory, worktree: '/private/worktree', client: {
       session: {
         list: async () => ({ data: [{ id: 'session', title: 'PRIVATE_TITLE', directory, parentID: 'parent' }] }),
         status: async () => ({ data: { session: { type: 'busy' } } }),
@@ -399,7 +399,7 @@ test('plugin classifies HTTP, network, and timeout report failures without leaki
       }
       return new Response('private response body', { status: failure });
     };
-    const plugin = await SupervisorPlugin({ directory: '/tmp' });
+    const plugin = await AgentDashboardPlugin({ directory: '/tmp' });
     for (let n = 0; n < 100 && warnings.length === 0; n++) await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(warnings.length, 1, `${failure} should produce one diagnostic`);
     assert.match(warnings[0], new RegExp(expected.replace(/[()]/g, '\\$&')));
@@ -427,7 +427,7 @@ test('plugin backs off repeated failures, rate-limits diagnostics, and recovers 
     requests++;
     return recovered ? new Response('', { status: 200 }) : new Response('', { status: 503 });
   };
-  const plugin = await SupervisorPlugin({ directory: '/tmp' });
+  const plugin = await AgentDashboardPlugin({ directory: '/tmp' });
   t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
   for (let n = 0; n < 100 && requests < 2; n++) await new Promise(resolve => setTimeout(resolve, 50));
   assert.ok(requests >= 2 && requests <= 5, `unexpected retry count ${requests}`);
