@@ -1,5 +1,5 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OpenCode Supervisor</title><link rel="stylesheet" href="/style.css"></head><body>
-<header><div><span class="brand">◈</span><strong>OpenCode <span>Supervisor</span></strong></div><span id="connection" role="status">Disconnected</span></header>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentDashboard</title><link rel="stylesheet" href="/style.css"></head><body>
+<header><div><span class="brand">◈</span><strong>AgentDashboard</strong></div><span id="connection" role="status">Disconnected</span></header>
 <main><section class="intro"><div><p class="eyebrow">YOUR AGENT CONTROL ROOM</p><h1>Every agent. One place.</h1><p class="muted">Live activity across your projects and machines.</p></div><button id="logout" hidden>Disconnect</button></section>
 <form id="login" hidden><label for="token">Companion access token</label><div class="row"><input id="token" type="password" required autocomplete="off" placeholder="Paste your SUPERVISOR_TOKEN"><button>Connect</button></div><p class="muted">The token stays in memory for this tab. Reports refresh every two seconds.</p><p id="error" role="alert"></p></form>
 <div id="dashboard" hidden><section id="metrics" class="metrics" aria-label="Agent totals"></section><h2 class="fleet-heading">Agents</h2>
@@ -19,4 +19,4 @@
   </div>
 </details>
 <div id="fleet"></div></div>
-</main><footer>OpenCode Supervisor · Read-only monitoring · Offline after 20 seconds without a heartbeat</footer><script type="module" src="/app.js"></script></body></html>
+</main><footer>AgentDashboard · Read-only monitoring · Offline after 20 seconds without a heartbeat</footer><script type="module" src="/app.js"></script></body></html>

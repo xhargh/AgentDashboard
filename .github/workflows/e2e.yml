@@ -15,11 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build test environment
-        run: docker build --tag opencode-supervisor-ci .
+        run: docker build --tag agentdashboard-ci .
       - name: Run browser tests
         run: >-
           docker run --rm
           --volume "$PWD:/workspace"
           --workdir /workspace
           --env CI=1
-          opencode-supervisor-ci
+          agentdashboard-ci

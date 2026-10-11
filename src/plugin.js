@@ -97,7 +97,7 @@ async function machineId() {
 }
 function reportWarning(category) {
   // Deliberately omit request/response bodies, credentials, and error messages.
-  console.warn(`[OpenCode Supervisor] Telemetry report failed: ${category}`);
+  console.warn(`[AgentDashboard] Telemetry report failed: ${category}`);
 }
 
 const RETRY_BASE_MS = 1000;
@@ -110,7 +110,7 @@ export function retryDelay(failures, random = Math.random) {
 
 export const SupervisorPlugin = async ({ directory, worktree, client }) => {
   let privacy;
-  try { privacy = telemetryConfig(); } catch (error) { console.warn(`[OpenCode Supervisor] ${error.message}`); return {}; }
+  try { privacy = telemetryConfig(); } catch (error) { console.warn(`[AgentDashboard] ${error.message}`); return {}; }
   let endpoint;
   try { endpoint = new URL(process.env.OPENCODE_SUPERVISOR_URL || 'http://127.0.0.1:4317'); } catch { return {}; }
   const token = process.env.OPENCODE_SUPERVISOR_TOKEN;

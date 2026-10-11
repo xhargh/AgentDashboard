@@ -1,8 +1,8 @@
-# OpenCode Supervisor
+# AgentDashboard
 
 > **Note:** This project is AI-generated, and not all features or configurations have been tested.
 
-A Linux-friendly, browser-based GUI for watching many OpenCode instances across projects and computers. A small OpenCode plugin reports to a central Node.js companion; the companion serves the dashboard. No runtime npm dependencies or build step.
+AgentDashboard is a Linux-friendly, browser-based GUI for watching many OpenCode instances across projects and computers. A small OpenCode plugin reports to a central Node.js companion; the companion serves the dashboard. No runtime npm dependencies or build step.
 
 - Counts online computers, OpenCode instances, active root agents, and active subagents.
 - Shows session titles, agent roles, tool activity, working folders, parent relationships, permission waits, and task lists.
@@ -86,6 +86,8 @@ Privacy filtering limits report contents, but does not encrypt a connection. Net
 
 Copy `packaging/opencode-supervisor.service` into `~/.config/systemd/user/`. Edit its `WorkingDirectory` and `ExecStart` to match this checkout and the output of `command -v node`.
 
+The existing systemd unit name, service filename, environment-file location, plugin filename, configuration directory, and `SUPERVISOR_*`/`OPENCODE_SUPERVISOR_*` variables are retained so existing installations continue to work.
+
 Create `~/.config/opencode-supervisor/environment` (keep it readable only by your user):
 
 ```ini
@@ -131,8 +133,8 @@ Plugin generations report a stable machine ID, process ID, and generation start 
 Install Docker Engine or Docker Desktop with BuildKit support; the host does not need Node.js, npm, Chromium, or Playwright dependencies. From the repository root, run:
 
 ```bash
-docker build -t opencode-supervisor-ci .
-docker run --rm -v "$PWD:/workspace" -w /workspace -e CI=1 opencode-supervisor-ci
+docker build -t agentdashboard-ci .
+docker run --rm -v "$PWD:/workspace" -w /workspace -e CI=1 agentdashboard-ci
 ```
 
 The image is based on the official Playwright `v1.56.1-noble` image, which pins Chromium and its Linux runtime dependencies to the Playwright version in `package.json`; the image includes Node 22.16 or newer. The container runs `npm ci`, `npm test`, `npm run check`, and `npm run test:e2e` in that order. The workflow in `.github/workflows/e2e.yml` builds and runs the same image for browser E2E.
