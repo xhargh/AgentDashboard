@@ -1,9 +1,10 @@
 import { buildSessionTree, classifySessions, isActiveCategory, isFinishedSubagentHidden, sessionMatchesSearch, sessionState } from './session-state.js';
 const $ = id => document.getElementById(id);
-let token = '', instances = [], pending = false, authRequired = false;
+let token = '', instances = [], revision = null, pending = false, authRequired = false;
 let notificationEnabled = false, initializedAttention = false;
 const previousStatuses = new Map();
 const originalTitle = document.title;
+const machineKey = i => i.machineId || `legacy:${i.host}`;
 const expandedAgents = new Set();
 const expandedActivity = new Set();
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
@@ -51,16 +52,15 @@ function render() {
   const sessions = online.flatMap(i => i.sessions.map(s => ({ session: s, classification: classificationsFor(i).get(s.id) })));
   const metrics = el('div');
   metrics.append(...[
-    ['Computers online', new Set(online.map(i => i.host)).size], ['OpenCode instances', online.length],
+    ['Computers online', new Set(online.map(machineKey)).size], ['OpenCode instances', online.length],
     ['Active agents', sessions.filter(({ session, classification }) => !session.parentID && isActiveCategory(classification)).length],
     ['Active subagents', sessions.filter(({ session, classification }) => session.parentID && isActiveCategory(classification)).length],
   ].map(([label, value]) => { const n = el('article', undefined, 'metric'); n.append(el('span', label), el('strong', value)); return n; }));
   reconcile($('metrics'), metrics);
   const selected = $('host').value;
-  const hosts = [...new Set(instances.map(i => i.host))].sort();
-  if (!$('host').options || $('host').options.length !== hosts.length + 1 || hosts.some((host, index) => $('host').options[index + 1]?.value !== host)) {
-    $('host').replaceChildren(new Option('All computers', ''), ...hosts.map(h => new Option(h, h)));
-  }
+  const machines = new Map(instances.map(i => [machineKey(i), i]));
+  const options = [new Option('All computers', ''), ...[...machines].sort((a, b) => a[1].host.localeCompare(b[1].host)).map(([key, i]) => new Option(i.host, key))];
+  if (!$('host').options || $('host').options.length !== options.length || options.some((option, index) => $('host').options[index]?.value !== option.value || $('host').options[index]?.text !== option.text)) $('host').replaceChildren(...options);
   $('host').value = selected;
   const query = $('search').value.toLowerCase();
   const fleet = el('div');
@@ -71,7 +71,9 @@ function render() {
     ['recently-finished', 'Recently finished', 'Completed subagents available if recalled', []],
     ['offline', 'Offline', 'Instances no longer reporting', []],
   ];
-  for (const i of instances.filter(i => !selected || i.host === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
+  let hiddenOffline = 0;
+  for (const i of instances.filter(i => !selected || machineKey(i) === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
+    if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
     const eligible = new Set();
     for (const s of i.sessions) {
       const classification = classificationsFor(i).get(s.id);
@@ -84,23 +86,24 @@ function render() {
       if (group) eligible.add(s.id);
     }
     function hasEligible(node) { return eligible.has(node.session.id) || node.children.some(hasEligible); }
+    if (!i.online && i.sessions.length === 0) groups.find(([id]) => id === 'offline')[3].push({ i, instanceOnly: true });
     function appendNode(parent, node) {
       if (!hasEligible(node)) return;
       const { session: s, children } = node, classification = classificationsFor(i).get(s.id);
       const display = sessionState(s, i.online, classification), key = `${i.instanceId}:${s.id}`;
-      const container = children.some(hasEligible) ? el('details', undefined, 'agent-tree') : el('div', undefined, 'agent-tree');
+      const container = children.length ? el('details', undefined, 'agent-tree') : el('div', undefined, 'agent-tree');
       container.dataset.agentKey = key;
       if (container.tagName === 'DETAILS') {
         container.open = expandedAgents.has(key);
         container.addEventListener('toggle', () => container.open ? expandedAgents.add(key) : expandedAgents.delete(key));
         const summary = el('summary', undefined, 'agent-tree-summary');
-        summary.append(el('span', `${s.title} · ${display.label}`, 'tree-title'), el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
+        summary.append(el('span', `${s.title || 'Session'} · ${display.label}`, 'tree-title'), el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
         if (classification.attentionRequired) summary.append(el('span', 'Attention in this branch', 'attention-summary'));
         container.append(summary);
       }
       const card = el('article', undefined, 'session-card');
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
-      info.append(el('strong', s.title), el('p', `${i.host} · ${i.directory}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
+       info.append(el('strong', s.title || 'Session'), el('p', `${i.host} · ${i.directory}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
       if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
       if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
       if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
@@ -131,13 +134,14 @@ function render() {
         details.append(grid); card.append(details);
       }
       container.append(card);
-      if (children.some(hasEligible)) { const nested = el('div', undefined, 'agent-tree-children'); for (const child of children) appendNode(nested, child); container.append(nested); }
+      if (children.length) { const nested = el('div', undefined, 'agent-tree-children'); for (const child of children) appendNode(nested, child); container.append(nested); }
       parent.append(container);
     }
     for (const root of buildSessionTree(i.sessions)) {
       if (!hasEligible(root)) continue;
       const classification = classificationsFor(i).get(root.session.id);
-      groups.find(([category]) => category === (classification.attentionRequired ? 'needs-attention' : classification.category))?.[3].push({ i, root });
+      const category = classification.attentionRequired ? 'needs-attention' : classification.category;
+      groups.find(([id]) => id === category)?.[3].push({ i, root, appendNode });
     }
   }
   for (const [id, heading, description, items] of groups) {
@@ -147,12 +151,15 @@ function render() {
     const h = el('h2', `${heading} · ${items.length}`); h.id = `group-${id}-heading`;
     title.append(h, el('p', description, 'muted')); section.append(title);
     if (!items.length) section.append(el('p', 'Nothing needs your attention right now.', 'empty'));
-    for (const { i, root } of items) appendNode(section, root);
+    for (const item of items) {
+      if (item.root) item.appendNode(section, item.root);
+      else if (item.instanceOnly) section.append(el('article', `${item.i.host} · ${item.i.online ? '● Online' : item.i.replaced ? '↻ Replaced' : '○ Offline'} · PID ${item.i.pid ?? 'unknown'}`, 'session-card'));
+    }
     fleet.append(section);
   }
   if (groups.every(([, , , items]) => !items.length)) {
     const empty = el('div', undefined, 'empty');
-    empty.append(el('h3', instances.length ? 'No sessions match the current filters' : 'Ready for your first agent'), el('p', instances.length ? 'Adjust the filters to see more activity.' : 'Install the plugin and start OpenCode. For other computers, configure the companion URL and token.'));
+    empty.append(el('h3', instances.length ? 'No sessions match the current filters' : 'Ready for your first agent'), el('p', instances.length ? `${hiddenOffline} offline instances hidden. Adjust the filters to see more activity.` : 'Install the plugin and start OpenCode. For other computers, configure the companion URL and token.'));
     fleet.append(empty);
   }
   reconcile($('fleet'), fleet);
@@ -186,25 +193,28 @@ async function poll() {
   const usedToken = token;
   const open = new Set([...document.querySelectorAll('details[open][data-instance]')].map(n => n.dataset.instance));
   try {
-    const response = await fetch('/api/state', { headers: usedToken ? { authorization: `Bearer ${usedToken}` } : {}, signal: AbortSignal.timeout(5000) });
+    const headers = usedToken ? { authorization: `Bearer ${usedToken}` } : {};
+    if (revision !== null) headers['if-none-match'] = `"${revision}"`;
+    const response = await fetch('/api/state', { headers, signal: AbortSignal.timeout(5000) });
     if (response.status === 401) {
-      authRequired = true; $('login').hidden = false; $('dashboard').hidden = true; $('logout').hidden = true;
+      revision = null; authRequired = true; $('login').hidden = false; $('dashboard').hidden = true; $('logout').hidden = true;
       $('connection').textContent = 'Network mode · token required';
       $('error').textContent = usedToken ? 'Invalid access token' : '';
       token = ''; return;
     }
+    if (response.status === 304) return;
     if (!response.ok) throw new Error(`Companion returned ${response.status}`);
     const data = await response.json(); if (token !== usedToken) return;
     authRequired = data.mode !== 'local';
     updateAttentionNotifications(data.instances);
-    instances = data.instances; $('login').hidden = true; $('dashboard').hidden = false; $('logout').hidden = !authRequired;
+    revision = data.revision; instances = data.instances; $('login').hidden = true; $('dashboard').hidden = false; $('logout').hidden = !authRequired;
     $('connection').textContent = authRequired ? '● Connected · network mode' : '● Connected · local only'; $('error').textContent = ''; render();
     document.querySelectorAll('details[data-instance]').forEach(n => n.open = open.has(n.dataset.instance));
-  } catch (e) { initializedAttention = false; previousStatuses.clear(); $('connection').textContent = '○ Disconnected · retrying'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
+  } catch (e) { revision = null; initializedAttention = false; previousStatuses.clear(); $('connection').textContent = '○ Disconnected · retrying'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
   finally { pending = false; }
 }
 $('login').addEventListener('submit', e => { e.preventDefault(); token = $('token').value.trim(); $('token').value = ''; void poll(); });
-$('logout').onclick = () => { token = ''; instances = []; $('dashboard').hidden = true; $('login').hidden = false; $('logout').hidden = true; $('connection').textContent = 'Disconnected'; };
+$('logout').onclick = () => { token = ''; revision = null; instances = []; $('dashboard').hidden = true; $('login').hidden = false; $('logout').hidden = true; $('connection').textContent = 'Disconnected'; };
 for (const id of ['host', 'search', 'active', 'hide-finished', 'hide-waiting', 'hide-offline']) $(id).addEventListener('input', render);
 $('notifications').addEventListener('change', async event => {
   notificationEnabled = event.target.checked;

@@ -9,11 +9,11 @@
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",
-    "test": "node --test --test-isolation=none test/*.test.js",
+    "test": "node --test test/*.test.js",
     "test:e2e": "playwright test",
-    "check": "node --check src/server.js && node --check src/plugin.js && node --check public/session-state.js && node --check public/app.js",
+    "check": "node --check src/server.js && node --check src/plugin.js && node --check scripts/smoke.js && node --check test/smoke.test.js && node --check public/session-state.js && node --check public/app.js",
     "install-plugin": "node scripts/install-plugin.js",
-    "smoke": "node scripts/smoke.js",
+    "smoke": "OPENCODE_LIVE_SMOKE=1 node --test test/smoke.test.js",
     "diagnose": "node --env-file-if-exists=.env scripts/diagnose.js"
   },
   "devDependencies": {
