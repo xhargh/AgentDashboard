@@ -4,9 +4,9 @@ let token = '', instances = [], revision = null, pending = false, authRequired =
 let notificationEnabled = false, initializedAttention = false;
 const previousStatuses = new Map();
 const originalTitle = document.title;
+const machineKey = i => i.machineId || `legacy:${i.host}`;
 const expandedAgents = new Set();
 const expandedActivity = new Set();
-const machineKey = i => i.machineId || `legacy:${i.host}`;
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 function reconcile(parent, desired) {
   if (!parent.querySelectorAll) { parent.replaceChildren(...desired.children); return; }
@@ -74,7 +74,9 @@ function render() {
     ['recently-finished', 'Recently finished', 'Completed subagents available if recalled', []],
     ['offline', 'Offline', 'Instances no longer reporting', []],
   ];
+  let hiddenOffline = 0;
   for (const i of instances.filter(i => !selected || machineKey(i) === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
+    if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
     const eligible = new Set();
     for (const s of i.sessions) {
       const classification = classificationsFor(i).get(s.id);
@@ -87,23 +89,24 @@ function render() {
       if (group) eligible.add(s.id);
     }
     function hasEligible(node) { return eligible.has(node.session.id) || node.children.some(hasEligible); }
+    if (!i.online && i.sessions.length === 0) groups.find(([id]) => id === 'offline')[3].push({ i, instanceOnly: true });
     function appendNode(parent, node) {
       if (!hasEligible(node)) return;
       const { session: s, children } = node, classification = classificationsFor(i).get(s.id);
       const display = sessionState(s, i.online, classification), key = `${i.instanceId}:${s.id}`;
-      const container = children.some(hasEligible) ? el('details', undefined, 'agent-tree') : el('div', undefined, 'agent-tree');
+      const container = children.length ? el('details', undefined, 'agent-tree') : el('div', undefined, 'agent-tree');
       container.dataset.agentKey = key;
       if (container.tagName === 'DETAILS') {
         container.open = expandedAgents.has(key);
         container.addEventListener('toggle', () => container.open ? expandedAgents.add(key) : expandedAgents.delete(key));
         const summary = el('summary', undefined, 'agent-tree-summary');
-        summary.append(el('span', `${s.title} · ${display.label}`, 'tree-title'), el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
+        summary.append(el('span', `${s.title || 'Session'} · ${display.label}`, 'tree-title'), el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
         if (classification.attentionRequired) summary.append(el('span', 'Attention in this branch', 'attention-summary'));
         container.append(summary);
       }
       const card = el('article', undefined, 'session-card');
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
-      info.append(el('strong', s.title), el('p', `${i.host} · ${i.directory}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
+       info.append(el('strong', s.title || 'Session'), el('p', `${i.host} · ${i.directory}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
       if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
       if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
       if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
@@ -134,13 +137,14 @@ function render() {
         details.append(grid); card.append(details);
       }
       container.append(card);
-      if (children.some(hasEligible)) { const nested = el('div', undefined, 'agent-tree-children'); for (const child of children) appendNode(nested, child); container.append(nested); }
+      if (children.length) { const nested = el('div', undefined, 'agent-tree-children'); for (const child of children) appendNode(nested, child); container.append(nested); }
       parent.append(container);
     }
     for (const root of buildSessionTree(i.sessions)) {
       if (!hasEligible(root)) continue;
       const classification = classificationsFor(i).get(root.session.id);
-      groups.find(([category]) => category === (classification.attentionRequired ? 'needs-attention' : classification.category))?.[3].push({ i, root });
+      const category = classification.attentionRequired ? 'needs-attention' : classification.category;
+      groups.find(([id]) => id === category)?.[3].push({ i, root, appendNode });
     }
   }
   for (const [id, heading, description, items] of groups) {
@@ -150,12 +154,15 @@ function render() {
     const h = el('h2', `${heading} · ${items.length}`); h.id = `group-${id}-heading`;
     title.append(h, el('p', description, 'muted')); section.append(title);
     if (!items.length) section.append(el('p', 'Nothing needs your attention right now.', 'empty'));
-    for (const { i, root } of items) appendNode(section, root);
+    for (const item of items) {
+      if (item.root) item.appendNode(section, item.root);
+      else if (item.instanceOnly) section.append(el('article', `${item.i.host} · ${item.i.online ? '● Online' : item.i.replaced ? '↻ Replaced' : '○ Offline'} · PID ${item.i.pid ?? 'unknown'}`, 'session-card'));
+    }
     fleet.append(section);
   }
   if (groups.every(([, , , items]) => !items.length)) {
     const empty = el('div', undefined, 'empty');
-    empty.append(el('h3', instances.length ? 'No sessions match the current filters' : 'Ready for your first agent'), el('p', instances.length ? 'Adjust the filters to see more activity.' : 'Install the plugin and start OpenCode. For other computers, configure the companion URL and token.'));
+    empty.append(el('h3', instances.length ? 'No sessions match the current filters' : 'Ready for your first agent'), el('p', instances.length ? `${hiddenOffline} offline instances hidden. Adjust the filters to see more activity.` : 'Install the plugin and start OpenCode. For other computers, configure the companion URL and token.'));
     fleet.append(empty);
   }
   reconcile($('fleet'), fleet);
