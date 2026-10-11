@@ -96,7 +96,9 @@ Privacy filtering limits report contents, but does not encrypt a connection. Net
 
 The optional Tauri prototype opens the dashboard in a native AgentDashboard window at `http://127.0.0.1:4317`. Start the companion separately first (`npm start` from this checkout); the desktop window does not launch or stop it. The wrapper navigates directly to the companion, so the dashboard and its `/api/state` requests retain the companion's HTTP loopback origin. No local-mode security checks have been changed to accommodate the webview. A branded system-tray icon toggles the window on a left click and its tooltip summarizes online instances, sessions, and sessions needing attention. Tooltip availability and presentation depend on the desktop environment; environments without tray support continue with the window alone.
 
-Build a Linux x86_64 executable with Docker BuildKit (no host Rust, Tauri CLI, Node.js, or webview development packages required):
+The approved Live A identity is shared by the web header and favicon, Tauri application and tray icons, and GNOME/freedesktop assets. The canonical SVG and generated icon kit are tracked under `packaging/icons/`; install `packaging/agentdashboard.desktop` and the matching `packaging/icons/hicolor/` theme files to add the application to a GNOME launcher. GNOME Shell integrations can use the theme-recolored `agentdashboard-symbolic` asset for panel status icons.
+
+Build a Linux x86_64 executable with Docker BuildKit (no host Rust, Tauri CLI, Node.js, or webview development packages required). The build uses the tracked Tauri icon exports:
 
 ```bash
 DOCKER_BUILDKIT=1 docker build -f Dockerfile.tauri --output type=local,dest=dist .
