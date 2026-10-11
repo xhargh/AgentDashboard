@@ -50,9 +50,9 @@ function renderMetrics(info, session, online) {
   const metrics = el('section', undefined, 'agent-metrics');
   const model = session.model;
   const modelLabel = model?.providerID && (model.name || model.modelID)
-    ? `${model.providerID} / ${model.name || model.modelID}` : 'Model unavailable';
+    ? `${model.providerName || model.providerID} / ${model.name || model.modelID}` : 'Model unavailable';
   metrics.append(el('p', modelLabel, 'model-label'));
-  metrics.append(el('p', model?.variant ? `${model.variant} variant` : model ? 'Default variant' : 'Variant unavailable', 'variant-label'));
+  metrics.append(el('p', model?.variant ? `${model.variant} variant` : 'Variant unavailable', 'variant-label'));
   const usage = session.usage;
   if (Number.isSafeInteger(usage?.contextEstimate) && Number.isSafeInteger(model?.contextLimit) && model.contextLimit > 0) {
     const used = usage.contextEstimate, limit = model.contextLimit, percentage = Math.min(100, used / limit * 100);
