@@ -105,17 +105,6 @@ async function inspectGit(cwd) {
   } catch { return { unavailable: 'Not a Git repository, Git unavailable, or repository inaccessible' }; }
 }
 
-function reportFailure(response) {
-  const status = response.status;
-  if (status === 401 || status === 403) return `authentication (HTTP ${status})`;
-  if (status === 400 || status === 413) return `rejected report (HTTP ${status})`;
-  if (status >= 500 && status <= 599) return `server failure (HTTP ${status})`;
-  return `HTTP failure (${status})`;
-}
-function transportFailure(error) {
-  return error?.name === 'TimeoutError' || error?.name === 'AbortError'
-    ? 'timeout' : 'network failure';
-}
 async function machineId() {
   const directory = join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'opencode-supervisor');
   const path = join(directory, 'machine-id');
@@ -138,14 +127,8 @@ async function machineId() {
     await unlink(temporary).catch(() => {});
   }
 }
-function reportWarning(category) {
-  // Deliberately omit request/response bodies, credentials, and error messages.
-  console.warn(`[AgentDashboard] Telemetry report failed: ${category}`);
-}
-
 const RETRY_BASE_MS = 1000;
 const RETRY_MAX_MS = 60000;
-const DIAGNOSTIC_INTERVAL_MS = 30000;
 export function retryDelay(failures, random = Math.random) {
   const ceiling = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.min(failures - 1, 16));
   return Math.round(ceiling * (0.5 + random() * 0.5));
@@ -153,7 +136,7 @@ export function retryDelay(failures, random = Math.random) {
 
 export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   let privacy;
-  try { privacy = telemetryConfig(); } catch (error) { console.warn(`[AgentDashboard] ${error.message}`); return {}; }
+  try { privacy = telemetryConfig(); } catch { return {}; }
   let endpoint;
   try { endpoint = new URL(process.env.OPENCODE_SUPERVISOR_URL || 'http://127.0.0.1:4317'); } catch { return {}; }
   const token = process.env.OPENCODE_SUPERVISOR_TOKEN;
@@ -187,7 +170,7 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   };
   const activityEvents = createActivityBuffer();
   let gitInfo = {}, lastGit = 0, sending = false, stopped = false, dirty = false, eventTimer;
-  let retryTimer, failures = 0, nextAttempt = 0, lastDiagnostic = 0;
+  let retryTimer, failures = 0, nextAttempt = 0;
   const session = id => {
     if (!sessions.has(id)) sessions.set(id, createSession(id, { title: 'Untitled session', directory, status: 'idle', activity: 'Ready' }));
     return sessions.get(id);
@@ -215,14 +198,12 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           directory, worktree, sessions: [...sessions.values()], git: gitInfo, events: activityEvents.snapshot() }, privacy)), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {
-        noteFailure(reportFailure(response));
         await response.body?.cancel();
         return;
       }
       await response.body?.cancel();
       succeeded = true;
     } catch (error) {
-      try { noteFailure(transportFailure(error)); } catch { /* Diagnostics must not affect agent execution. */ }
       // Monitoring outages do not interrupt agent execution. Next heartbeat retries.
     }
     finally {
@@ -238,12 +219,6 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
       }
       if (dirty && !stopped) { dirty = false; if (succeeded) scheduleReport(); }
     }
-  }
-  function noteFailure(category) {
-    const now = Date.now();
-    if (now - lastDiagnostic < DIAGNOSTIC_INTERVAL_MS) return;
-    lastDiagnostic = now;
-    try { reportWarning(category); } catch { /* Diagnostics must not affect agent execution. */ }
   }
   function scheduleReport() {
     if (eventTimer || stopped) return;
