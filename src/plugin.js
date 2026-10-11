@@ -161,7 +161,7 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
       await response.body?.cancel();
       succeeded = true;
     } catch (error) {
-      noteFailure(transportFailure(error));
+      try { noteFailure(transportFailure(error)); } catch { /* Diagnostics must not affect agent execution. */ }
       // Monitoring outages do not interrupt agent execution. Next heartbeat retries.
     }
     finally {

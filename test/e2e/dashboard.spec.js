@@ -111,7 +111,7 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(page.getByText('Unknown-age review', { exact: true })).toBeVisible();
 
   await page.getByText('Filter agents').click();
-  await page.getByLabel('Computer').selectOption('beta');
+  await page.getByLabel('Computer').selectOption('legacy:beta');
   await expect(page.getByText('Fix API', { exact: true })).toBeVisible();
   await expect(page.locator('.tree-title').filter({ hasText: 'Build dashboard' })).toHaveCount(0);
 
@@ -170,6 +170,20 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
   await expect(page.locator('.tree-title').filter({ hasText: 'Deploy dashboard' })).toBeVisible();
   await expect(details).toHaveAttribute('open', '');
   await expect(details.getByRole('heading', { name: 'Recent commits' })).toBeVisible();
+});
+
+test('renders status-only instances without optional metadata', async ({ page }) => {
+  const now = Date.now();
+  await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [{
+    instanceId: 'status-only', machineId: 'machine', host: 'private-host', pid: 42, online: true, lastSeen: now,
+    sessions: [{ id: 'session', status: 'busy' }],
+  }] }));
+  await page.goto('/');
+
+  await expect(page.locator('#fleet').getByText('private-host', { exact: true })).toBeVisible();
+  await expect(page.getByText('Session', { exact: true })).toBeVisible();
+  await expect(page.locator('#fleet .badge')).toHaveText('busy');
+  await expect(page.getByText('undefined', { exact: true })).toHaveCount(0);
 });
 
 test('updates keyed session nodes across rapid state changes and removes deleted sessions', async ({ page }) => {
@@ -272,7 +286,7 @@ test('searches todo content through nested sessions while preserving ancestor co
   });
   await page.goto('/');
   await page.getByText('Filter agents').click();
-  await page.getByLabel('Computer').selectOption('alpha');
+  await page.getByLabel('Computer').selectOption('legacy:alpha');
   await page.locator('#active').check();
   await page.getByLabel('Search').fill('distinctive nested task text');
 

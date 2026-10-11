@@ -59,8 +59,11 @@ function render() {
   reconcile($('metrics'), metrics);
   const selected = $('host').value;
   const machines = new Map(instances.map(i => [machineKey(i), i]));
-  const options = [new Option('All computers', ''), ...[...machines].sort((a, b) => a[1].host.localeCompare(b[1].host)).map(([key, i]) => new Option(i.host, key))];
-  if (!$('host').options || $('host').options.length !== options.length || options.some((option, index) => $('host').options[index]?.value !== option.value || $('host').options[index]?.text !== option.text)) $('host').replaceChildren(...options);
+  const options = [...machines].sort((a, b) => a[1].host.localeCompare(b[1].host)).map(([key, i]) =>
+    new Option(instances.filter(other => other.host === i.host).length > 1 ? `${i.host} (${key.slice(0, 8)})` : i.host, key));
+  if (!$('host').options || $('host').options.length !== options.length + 1 || options.some((option, index) => $('host').options[index + 1]?.value !== option.value)) {
+    $('host').replaceChildren(new Option('All computers', ''), ...options);
+  }
   $('host').value = selected;
   const query = $('search').value.toLowerCase();
   const fleet = el('div');
@@ -72,7 +75,7 @@ function render() {
     ['offline', 'Offline', 'Instances no longer reporting', []],
   ];
   let hiddenOffline = 0;
-  for (const i of instances.filter(i => !selected || machineKey(i) === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
+  for (const i of instances.filter(i => !selected || machineKey(i) === selected || i.host === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
     if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
     const eligible = new Set();
     for (const s of i.sessions) {
@@ -103,7 +106,7 @@ function render() {
       }
       const card = el('article', undefined, 'session-card');
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div');
-       info.append(el('strong', s.title || 'Session'), el('p', `${i.host} · ${i.directory}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
+      info.append(el('strong', s.title || 'Session'), el('p', i.directory ? `${i.host} · ${i.directory}` : i.host, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
       if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
       if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
       if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
@@ -197,7 +200,8 @@ async function poll() {
     if (revision !== null) headers['if-none-match'] = `"${revision}"`;
     const response = await fetch('/api/state', { headers, signal: AbortSignal.timeout(5000) });
     if (response.status === 401) {
-      revision = null; authRequired = true; $('login').hidden = false; $('dashboard').hidden = true; $('logout').hidden = true;
+      revision = null;
+      authRequired = true; $('login').hidden = false; $('dashboard').hidden = true; $('logout').hidden = true;
       $('connection').textContent = 'Network mode · token required';
       $('error').textContent = usedToken ? 'Invalid access token' : '';
       token = ''; return;
@@ -206,8 +210,9 @@ async function poll() {
     if (!response.ok) throw new Error(`Companion returned ${response.status}`);
     const data = await response.json(); if (token !== usedToken) return;
     authRequired = data.mode !== 'local';
+    revision = data.revision;
     updateAttentionNotifications(data.instances);
-    revision = data.revision; instances = data.instances; $('login').hidden = true; $('dashboard').hidden = false; $('logout').hidden = !authRequired;
+    instances = data.instances; $('login').hidden = true; $('dashboard').hidden = false; $('logout').hidden = !authRequired;
     $('connection').textContent = authRequired ? '● Connected · network mode' : '● Connected · local only'; $('error').textContent = ''; render();
     document.querySelectorAll('details[data-instance]').forEach(n => n.open = open.has(n.dataset.instance));
   } catch (e) { revision = null; initializedAttention = false; previousStatuses.clear(); $('connection').textContent = '○ Disconnected · retrying'; $('error').textContent = e.message; if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
