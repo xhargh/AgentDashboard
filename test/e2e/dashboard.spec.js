@@ -135,6 +135,19 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(page.locator('.tree-title').filter({ hasText: 'Fix API' })).toHaveCount(0);
 });
 
+test('hides the needs-attention group when no sessions need attention', async ({ page }) => {
+  await installStateFixture(page, () => {
+    const state = report();
+    for (const instance of state.instances) instance.sessions = instance.sessions.filter(session => session.status !== 'waiting' && session.status !== 'error');
+    return state;
+  });
+  await page.goto('/');
+
+  await expect(page.getByRole('heading', { name: /^Needs attention/ })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Working · 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Waiting for input · 1' })).toBeVisible();
+});
+
 test('all agent status groups can be folded and unfolded', async ({ page }) => {
   await installStateFixture(page, () => report());
   await page.goto('/');
