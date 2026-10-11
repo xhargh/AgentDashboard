@@ -411,6 +411,37 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   await emit('session.deleted', { info: { id: 'child' } });
   await waitFor(i => i && !i.sessions.some(s => s.id === 'child'));
 });
+test('replacing a base session removes the previous root but retains the new root and its children', async t => {
+  const originalFetch = globalThis.fetch;
+  const keys = ['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'XDG_CONFIG_HOME'];
+  const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const config = await mkdtemp(join(tmpdir(), 'agentdashboard-replaced-session-'));
+  const reports = [];
+  process.env.AGENTDASHBOARD_URL = 'http://127.0.0.1:4317';
+  process.env.AGENTDASHBOARD_TOKEN = token;
+  process.env.XDG_CONFIG_HOME = config;
+  globalThis.fetch = async (_url, init) => { reports.push(JSON.parse(init.body)); return new Response('', { status: 200 }); };
+  const directory = '/tmp/replaced-session';
+  const plugin = await AgentDashboardPlugin({ directory, client: {
+    session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) },
+  } });
+  t.after(async () => {
+    await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory } } });
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(config, { recursive: true, force: true });
+  });
+  await plugin.event({ event: { type: 'session.created', properties: { info: { id: 'old-root', title: 'Old', directory } } } });
+  await plugin.event({ event: { type: 'session.created', properties: { info: { id: 'other-root', title: 'Other directory', directory: '/tmp/other' } } } });
+  await plugin.event({ event: { type: 'session.idle', properties: { sessionID: 'old-root' } } });
+  await plugin.event({ event: { type: 'session.created', properties: { info: { id: 'new-root', title: 'New', directory } } } });
+  await plugin.event({ event: { type: 'session.created', properties: { info: { id: 'new-child', parentID: 'new-root', title: 'Child', directory } } } });
+  for (let n = 0; n < 100 && !reports.some(report => report.sessions.some(session => session.id === 'new-child')); n++) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  const sessions = reports.at(-1).sessions.map(session => session.id);
+  assert.deepEqual(sessions, ['other-root', 'new-root', 'new-child']);
+});
 test('plugin refuses remote telemetry without a token', async t => {
   const old = process.env.AGENTDASHBOARD_URL;
   t.after(() => { if (old === undefined) delete process.env.AGENTDASHBOARD_URL; else process.env.AGENTDASHBOARD_URL = old; });
