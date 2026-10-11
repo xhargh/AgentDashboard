@@ -59,6 +59,7 @@ footer { max-width: 1240px; margin: auto; padding: 20px 40px; border-top: 1px so
 .metric { padding: 0 28px; border-right: 1px solid var(--line); }
 .metric:last-child { border: 0; }
 .metric span { display: block; color: var(--muted); font-size: 12px; }
+.metric small { display: block; margin-top: 4px; font-size: 10px; }
 .metric strong { display: block; font-size: 32px; font-weight: 550; letter-spacing: -1px; font-variant-numeric: tabular-nums; line-height: 1.2; margin-top: 8px; }
 .metric:nth-child(3) strong { color: var(--accent); }
 .fleet-controls { position: relative; margin: 32px 0 24px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
