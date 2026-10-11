@@ -53,7 +53,7 @@ test('large nested fleet reuses keyed DOM and preserves interaction state throug
   await search.evaluate(input => input.setSelectionRange(6, 12));
   await page.evaluate(() => {
     const fleet = document.querySelector('#fleet');
-    window.perfNodes = [...fleet.querySelectorAll('[data-agent-key]')];
+    window.perfNodes = [...fleet.querySelectorAll('.agent-tree[data-agent-key]')];
     window.perfMutationCounts = [];
     window.perfObserver = new MutationObserver(records => {
       window.perfMutationCounts.push(records.reduce((count, record) => count + record.addedNodes.length + record.removedNodes.length, 0));

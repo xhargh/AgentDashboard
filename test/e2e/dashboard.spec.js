@@ -110,6 +110,7 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(page.getByRole('heading', { name: 'Waiting for input · 1' })).toBeVisible();
   const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
   await expect(root.locator(':scope > summary')).toContainText('2 children');
+  await expect(root.locator(':scope > summary .badge')).toHaveText('busy');
   await root.locator(':scope > summary').click();
   await expect(page.getByText('Finished review', { exact: true })).toBeVisible();
   await expect(page.getByText('Unknown-age review', { exact: true })).toBeVisible();
@@ -129,6 +130,22 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await page.locator('#active').check();
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
   await expect(page.locator('.tree-title').filter({ hasText: 'Fix API' })).toHaveCount(0);
+});
+
+test('all agent status groups can be folded and unfolded', async ({ page }) => {
+  await installStateFixture(page, () => report());
+  await page.goto('/');
+  const working = page.locator('details.session-group.group-working');
+  await working.locator(':scope > summary').click();
+  await expect(working).not.toHaveAttribute('open', '');
+  await expect(working.locator('[data-agent-key="instance-alpha:root-alpha"]')).toBeHidden();
+  await working.locator(':scope > summary').click();
+  await expect(working.locator('[data-agent-key="instance-alpha:root-alpha"]')).toBeVisible();
+
+  const waiting = page.locator('details.session-group.group-waiting-for-input');
+  await waiting.locator(':scope > summary').click();
+  await expect(waiting).not.toHaveAttribute('open', '');
+  await expect(waiting.locator('[data-agent-key="instance-beta:root-beta"]')).toBeHidden();
 });
 
 test('folded Git workspace summarizes changes, worktrees, and last commit', async ({ page }) => {
@@ -212,6 +229,18 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
   await expect(page.locator('.tree-title').filter({ hasText: 'Deploy dashboard' })).toBeVisible();
   await expect(details).toHaveAttribute('open', '');
   await expect(details.getByRole('heading', { name: 'Recent commits' })).toBeVisible();
+});
+
+test('folded agent status label follows the latest base-agent status', async ({ page }) => {
+  let polls = 0;
+  await installStateFixture(page, () => {
+    polls++;
+    return report('Build dashboard', polls > 1 ? 'idle' : 'busy');
+  });
+  await page.goto('/');
+  const summary = page.locator('[data-agent-key="instance-alpha:root-alpha"] > summary');
+  await expect(summary.locator('.badge')).toHaveText('busy');
+  await expect(summary.locator('.badge')).toHaveText('Waiting for input');
 });
 
 test('renders status-only instances without optional metadata', async ({ page }) => {

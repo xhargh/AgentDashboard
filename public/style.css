@@ -85,6 +85,9 @@ footer { max-width: 1240px; margin: auto; padding: 20px 40px; border-top: 1px so
 
 /* Status groups and agent cards. */
 .session-group { margin: 28px 0; scroll-margin-top: 20px; }
+.session-group > summary { cursor: pointer; list-style-position: inside; }
+.session-group > summary::-webkit-details-marker { color: var(--muted); }
+.session-group:not([open]) > summary { margin-bottom: 0; }
 .group-heading { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 13px; }
 .group-heading h2 { font-size: 13px; letter-spacing: 0; }
 .group-heading h2::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 9px 2px 0; border-radius: 50%; background: var(--muted); }
