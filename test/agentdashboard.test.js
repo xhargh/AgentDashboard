@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -77,7 +77,7 @@ test('accepts reports with privacy-filtered optional metadata', async t => {
 });
 test('reports assistant model metadata per session and filters it at the outbound boundary', async t => {
   const originalFetch = globalThis.fetch;
-  const keys = ['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_TELEMETRY', 'XDG_CONFIG_HOME'];
+  const keys = ['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'AGENTDASHBOARD_TELEMETRY', 'XDG_CONFIG_HOME'];
   const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   const root = await mkdtemp(join(tmpdir(), 'supervisor-model-'));
   t.after(async () => {
@@ -85,8 +85,8 @@ test('reports assistant model metadata per session and filters it at the outboun
     for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
     await rm(root, { recursive: true, force: true });
   });
-  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
-  process.env.OPENCODE_SUPERVISOR_TOKEN = token;
+  process.env.AGENTDASHBOARD_URL = 'http://127.0.0.1:4317';
+  process.env.AGENTDASHBOARD_TOKEN = token;
   process.env.XDG_CONFIG_HOME = root;
   const reports = [];
   globalThis.fetch = async (_url, init) => { reports.push(JSON.parse(init.body)); return new Response('', { status: 200 }); };
@@ -122,7 +122,7 @@ test('reports assistant model metadata per session and filters it at the outboun
   assert.deepEqual(switched.find(s => s.id === 'child').model, { providerID: 'provider-b', modelID: 'model-z' },
     'one session model switch does not overwrite another session metadata');
 
-  process.env.OPENCODE_SUPERVISOR_TELEMETRY = '{"modelMetrics":false}';
+  process.env.AGENTDASHBOARD_TELEMETRY = '{"modelMetrics":false}';
   const filtered = await AgentDashboardPlugin({ directory: '/tmp', client });
   t.after(() => filtered.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
   await filtered.event({ event: { type: 'message.updated', properties: { info: {
@@ -131,7 +131,7 @@ test('reports assistant model metadata per session and filters it at the outboun
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(!JSON.stringify(reports.at(-1)).includes('private-provider'));
 
-  process.env.OPENCODE_SUPERVISOR_TELEMETRY = '{"profile":"status-only"}';
+  process.env.AGENTDASHBOARD_TELEMETRY = '{"profile":"status-only"}';
   const statusOnly = await AgentDashboardPlugin({ directory: '/tmp', client });
   t.after(() => statusOnly.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
   await statusOnly.event({ event: { type: 'message.updated', properties: { info: {
@@ -158,7 +158,7 @@ test('validates optional model metadata while accepting legacy sessions', async 
 });
 test('tracks bounded idempotent usage per session and keeps latest context separate', async t => {
   const originalFetch = globalThis.fetch;
-  const keys = ['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_TELEMETRY', 'XDG_CONFIG_HOME'];
+  const keys = ['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'AGENTDASHBOARD_TELEMETRY', 'XDG_CONFIG_HOME'];
   const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   const root = await mkdtemp(join(tmpdir(), 'supervisor-usage-'));
   t.after(async () => {
@@ -166,8 +166,8 @@ test('tracks bounded idempotent usage per session and keeps latest context separ
     for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
     await rm(root, { recursive: true, force: true });
   });
-  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317'; process.env.OPENCODE_SUPERVISOR_TOKEN = token;
-  process.env.XDG_CONFIG_HOME = root; delete process.env.OPENCODE_SUPERVISOR_TELEMETRY;
+  process.env.AGENTDASHBOARD_URL = 'http://127.0.0.1:4317'; process.env.AGENTDASHBOARD_TOKEN = token;
+  process.env.XDG_CONFIG_HOME = root; delete process.env.AGENTDASHBOARD_TELEMETRY;
   const reports = [];
   globalThis.fetch = async (_url, init) => { reports.push(JSON.parse(init.body)); return new Response('', { status: 200 }); };
   const client = { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) }, config: { providers: async () => ({ data: { providers: [
@@ -292,7 +292,7 @@ test('state revision changes only for meaningful reports and derived transitions
 });
 test('machine identity persists across plugin generations and distinguishes machines and concurrent processes', async t => {
   const originalFetch = globalThis.fetch;
-  const old = Object.fromEntries(['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_HOST', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
+  const old = Object.fromEntries(['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'AGENTDASHBOARD_HOST', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
   const root = await mkdtemp(join(tmpdir(), 'supervisor-identity-'));
   t.after(async () => {
     globalThis.fetch = originalFetch;
@@ -306,9 +306,9 @@ test('machine identity persists across plugin generations and distinguishes mach
     for (const plugin of plugins) await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } });
   });
   globalThis.fetch = dispatch;
-  process.env.OPENCODE_SUPERVISOR_URL = 'http://localhost:4317';
-  process.env.OPENCODE_SUPERVISOR_TOKEN = token;
-  process.env.OPENCODE_SUPERVISOR_HOST = 'same-hostname';
+  process.env.AGENTDASHBOARD_URL = 'http://localhost:4317';
+  process.env.AGENTDASHBOARD_TOKEN = token;
+  process.env.AGENTDASHBOARD_HOST = 'same-hostname';
   const client = { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } };
   const runAt = async config => {
     process.env.XDG_CONFIG_HOME = config;
@@ -338,6 +338,32 @@ test('machine identity persists across plugin generations and distinguishes mach
   assert.notEqual(restarted.instanceId, oldGeneration);
   assert.equal(new Set(current.map(i => i.host)).size, 1);
 });
+test('migrates the legacy machine ID into the AgentDashboard config without changing identity', async t => {
+  const originalFetch = globalThis.fetch;
+  const keys = ['AGENTDASHBOARD_URL', 'OPENCODE_SUPERVISOR_URL', 'AGENTDASHBOARD_TOKEN', 'OPENCODE_SUPERVISOR_TOKEN', 'XDG_CONFIG_HOME'];
+  const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const root = await mkdtemp(join(tmpdir(), 'agentdashboard-identity-migration-'));
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(root, { recursive: true, force: true });
+  });
+  const legacyDirectory = join(root, 'opencode-supervisor');
+  await mkdir(legacyDirectory, { recursive: true });
+  await writeFile(join(legacyDirectory, 'machine-id'), 'stable-legacy-machine-id');
+  process.env.XDG_CONFIG_HOME = root;
+  process.env.AGENTDASHBOARD_URL = 'http://127.0.0.1:4317';
+  process.env.AGENTDASHBOARD_TOKEN = token;
+  delete process.env.OPENCODE_SUPERVISOR_URL;
+  delete process.env.OPENCODE_SUPERVISOR_TOKEN;
+  let report;
+  globalThis.fetch = async (_url, init) => { report = JSON.parse(init.body); return new Response('', { status: 200 }); };
+  const plugin = await AgentDashboardPlugin({ directory: '/tmp', client: { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } } });
+  t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
+  for (let n = 0; n < 100 && !report; n++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(report.machineId, 'stable-legacy-machine-id');
+  assert.equal(await readFile(join(root, 'agentdashboard', 'machine-id'), 'utf8'), 'stable-legacy-machine-id');
+});
 test('rejects unauthenticated, malformed, oversized and cross-origin requests', async t => {
   const { url, request, dispatch } = await start(t);
   assert.equal((await dispatch(url + '/api/state')).status, 401);
@@ -356,8 +382,8 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   await git('worktree', 'add', '-b', 'feature', join(dir, 'linked'));
   const { url, request, dispatch } = await start(t, local ? { token: undefined } : {});
   const originalFetch = globalThis.fetch; globalThis.fetch = dispatch; t.after(() => { globalThis.fetch = originalFetch; });
-  process.env.OPENCODE_SUPERVISOR_URL = url; process.env.OPENCODE_SUPERVISOR_TOKEN = local ? '' : token;
-  t.after(() => { delete process.env.OPENCODE_SUPERVISOR_URL; delete process.env.OPENCODE_SUPERVISOR_TOKEN; });
+  process.env.AGENTDASHBOARD_URL = url; process.env.AGENTDASHBOARD_TOKEN = local ? '' : token;
+  t.after(() => { delete process.env.AGENTDASHBOARD_URL; delete process.env.AGENTDASHBOARD_TOKEN; });
   const plugin = await AgentDashboardPlugin({ directory: dir, worktree: dir, client: { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } } });
   t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: dir } } }));
   async function emit(type, properties) { await plugin.event({ event: { type, properties } }); }
@@ -386,14 +412,37 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   await waitFor(i => i && !i.sessions.some(s => s.id === 'child'));
 });
 test('plugin refuses remote telemetry without a token', async t => {
-  const old = process.env.OPENCODE_SUPERVISOR_URL;
-  t.after(() => { if (old === undefined) delete process.env.OPENCODE_SUPERVISOR_URL; else process.env.OPENCODE_SUPERVISOR_URL = old; });
-  process.env.OPENCODE_SUPERVISOR_URL = 'http://192.168.1.10:4317';
+  const old = process.env.AGENTDASHBOARD_URL;
+  t.after(() => { if (old === undefined) delete process.env.AGENTDASHBOARD_URL; else process.env.AGENTDASHBOARD_URL = old; });
+  process.env.AGENTDASHBOARD_URL = 'http://192.168.1.10:4317';
   assert.deepEqual(await AgentDashboardPlugin({ directory: '/tmp' }), {});
+});
+test('legacy plugin environment names do not enable remote reports', async t => {
+  const keys = ['AGENTDASHBOARD_URL', 'OPENCODE_SUPERVISOR_URL', 'AGENTDASHBOARD_TOKEN', 'OPENCODE_SUPERVISOR_TOKEN', 'XDG_CONFIG_HOME'];
+  const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const originalFetch = globalThis.fetch;
+  const config = await mkdtemp(join(tmpdir(), 'agentdashboard-legacy-env-'));
+  let requested;
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(config, { recursive: true, force: true });
+  });
+  delete process.env.AGENTDASHBOARD_URL;
+  process.env.OPENCODE_SUPERVISOR_URL = 'http://192.168.1.10:4317';
+  delete process.env.AGENTDASHBOARD_TOKEN;
+  process.env.OPENCODE_SUPERVISOR_TOKEN = token;
+  process.env.XDG_CONFIG_HOME = config;
+  globalThis.fetch = async (url, init) => { requested = { url: String(url), headers: init.headers }; return new Response('', { status: 200 }); };
+  const plugin = await AgentDashboardPlugin({ directory: '/tmp' });
+  for (let n = 0; n < 100 && !requested; n++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(requested.url, 'http://127.0.0.1:4317/api/report', 'the unsupported remote legacy URL is ignored');
+  assert.equal(requested.headers.authorization, undefined, 'the unsupported legacy token is not sent');
+  await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } });
 });
 test('status-only telemetry strips metadata before transmission and validates settings', async t => {
   const originalFetch = globalThis.fetch;
-  const old = Object.fromEntries(['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_TELEMETRY', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
+  const old = Object.fromEntries(['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'AGENTDASHBOARD_TELEMETRY', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
   const root = await mkdtemp(join(tmpdir(), 'supervisor-privacy-'));
   let sent;
   t.after(async () => {
@@ -401,9 +450,9 @@ test('status-only telemetry strips metadata before transmission and validates se
     for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
     await rm(root, { recursive: true, force: true });
   });
-  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
-  process.env.OPENCODE_SUPERVISOR_TOKEN = token;
-  process.env.OPENCODE_SUPERVISOR_TELEMETRY = '{"profile":"status-only"}';
+  process.env.AGENTDASHBOARD_URL = 'http://127.0.0.1:4317';
+  process.env.AGENTDASHBOARD_TOKEN = token;
+  process.env.AGENTDASHBOARD_TELEMETRY = '{"profile":"status-only"}';
   process.env.XDG_CONFIG_HOME = root;
   globalThis.fetch = async (_url, init) => { sent = JSON.parse(init.body); return new Response('', { status: 200 }); };
   const plugin = await AgentDashboardPlugin({ directory: '/private/project', worktree: '/private/worktree', client: { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } } });
@@ -422,13 +471,13 @@ test('status-only telemetry strips metadata before transmission and validates se
   assert.equal(sent.git, undefined);
   assert.equal(sent.machineId.length > 0, true);
   assert.deepEqual(await (async () => {
-    process.env.OPENCODE_SUPERVISOR_TELEMETRY = '{"unknown":false}';
+    process.env.AGENTDASHBOARD_TELEMETRY = '{"unknown":false}';
     return AgentDashboardPlugin({ directory: '/tmp' });
   })(), {});
 });
 test('each telemetry privacy category is filtered from the outgoing report payload', async t => {
   const originalFetch = globalThis.fetch;
-  const keys = ['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'OPENCODE_SUPERVISOR_TELEMETRY', 'XDG_CONFIG_HOME'];
+  const keys = ['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'AGENTDASHBOARD_TELEMETRY', 'XDG_CONFIG_HOME'];
   const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   const root = await mkdtemp(join(tmpdir(), 'supervisor-privacy-categories-'));
   t.after(async () => {
@@ -436,8 +485,8 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
     for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
     await rm(root, { recursive: true, force: true });
   });
-  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
-  process.env.OPENCODE_SUPERVISOR_TOKEN = token;
+  process.env.AGENTDASHBOARD_URL = 'http://127.0.0.1:4317';
+  process.env.AGENTDASHBOARD_TOKEN = token;
   process.env.XDG_CONFIG_HOME = root;
   const git = (...args) => promisify(execFile)('git', ['-C', root, ...args]);
   await git('init');
@@ -451,7 +500,7 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
     ['titles', 'PRIVATE_TITLE'], ['tasks', 'PRIVATE_TASK'], ['toolActivity', 'PRIVATE_ACTIVITY'], ['modelMetrics', 'PRIVATE_MODEL'],
     ['paths', root], ['git', 'PRIVATE_COMMIT'],
   ]) {
-    process.env.OPENCODE_SUPERVISOR_TELEMETRY = JSON.stringify({ [category]: false });
+    process.env.AGENTDASHBOARD_TELEMETRY = JSON.stringify({ [category]: false });
     const reports = [];
     globalThis.fetch = async (_url, init) => { reports.push(JSON.parse(init.body)); return new Response('', { status: 200 }); };
     const directory = root;
@@ -498,18 +547,18 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
 test('plugin keeps HTTP, network, and timeout failures out of client output', async t => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
-  const oldUrl = process.env.OPENCODE_SUPERVISOR_URL;
-  const oldToken = process.env.OPENCODE_SUPERVISOR_TOKEN;
+  const oldUrl = process.env.AGENTDASHBOARD_URL;
+  const oldToken = process.env.AGENTDASHBOARD_TOKEN;
   t.after(() => {
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;
-    if (oldUrl === undefined) delete process.env.OPENCODE_SUPERVISOR_URL;
-    else process.env.OPENCODE_SUPERVISOR_URL = oldUrl;
-    if (oldToken === undefined) delete process.env.OPENCODE_SUPERVISOR_TOKEN;
-    else process.env.OPENCODE_SUPERVISOR_TOKEN = oldToken;
+    if (oldUrl === undefined) delete process.env.AGENTDASHBOARD_URL;
+    else process.env.AGENTDASHBOARD_URL = oldUrl;
+    if (oldToken === undefined) delete process.env.AGENTDASHBOARD_TOKEN;
+    else process.env.AGENTDASHBOARD_TOKEN = oldToken;
   });
-  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
-  process.env.OPENCODE_SUPERVISOR_TOKEN = 'secret-token-that-must-not-be-logged';
+  process.env.AGENTDASHBOARD_URL = 'http://127.0.0.1:4317';
+  process.env.AGENTDASHBOARD_TOKEN = 'secret-token-that-must-not-be-logged';
 
   const cases = [401, 403, 400, 413, 500, 503, 'network', 'timeout'];
   for (const failure of cases) {
@@ -531,15 +580,15 @@ test('plugin keeps HTTP, network, and timeout failures out of client output', as
 test('plugin backs off repeated failures and recovers on retry without client output', async t => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
-  const old = Object.fromEntries(['OPENCODE_SUPERVISOR_URL', 'OPENCODE_SUPERVISOR_TOKEN', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
+  const old = Object.fromEntries(['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'XDG_CONFIG_HOME'].map(k => [k, process.env[k]]));
   const root = await mkdtemp(join(tmpdir(), 'supervisor-retry-'));
   t.after(async () => {
     globalThis.fetch = originalFetch; console.warn = originalWarn;
     for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
     await rm(root, { recursive: true, force: true });
   });
-  process.env.OPENCODE_SUPERVISOR_URL = 'http://127.0.0.1:4317';
-  process.env.OPENCODE_SUPERVISOR_TOKEN = 'test-token';
+  process.env.AGENTDASHBOARD_URL = 'http://127.0.0.1:4317';
+  process.env.AGENTDASHBOARD_TOKEN = 'test-token';
   process.env.XDG_CONFIG_HOME = root;
   let requests = 0, recovered = false;
   const warnings = [];

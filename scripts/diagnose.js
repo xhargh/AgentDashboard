@@ -4,10 +4,12 @@ if (!Number.isInteger(pid) || pid <= 0) {
   console.error('Usage: npm run diagnose -- <opencode-pid>');
   process.exitCode = 1;
 } else {
-  const url = `http://127.0.0.1:${process.env.PORT || 4317}`;
+  const token = process.env.AGENTDASHBOARD_TOKEN;
+  const port = process.env.AGENTDASHBOARD_PORT || 4317;
+  const url = `http://127.0.0.1:${port}`;
   try {
     const response = await fetch(url + '/api/state', {
-      headers: process.env.SUPERVISOR_TOKEN ? { authorization: `Bearer ${process.env.SUPERVISOR_TOKEN}` } : {}, signal: AbortSignal.timeout(5000),
+      headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) throw new Error(`Companion returned HTTP ${response.status}`);
     const data = await response.json();
