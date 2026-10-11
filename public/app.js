@@ -9,6 +9,11 @@ const machineKey = i => i.machineId || `legacy:${i.host}`;
 const expandedAgents = new Set();
 const expandedActivity = new Set();
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
+function formatTimestamp(value) {
+  const date = new Date(value);
+  const pad = number => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
 function reconcile(parent, desired) {
   if (!parent.querySelectorAll) { parent.replaceChildren(...desired.children); return; }
   const keyed = new Map([...parent.querySelectorAll('[data-agent-key]')].map(node => [node.dataset.agentKey, node]));
@@ -164,7 +169,7 @@ function render() {
         const list = el('ol', undefined, 'activity-list');
         for (const event of events) {
           const [label, kindClass] = eventKinds[event.kind], item = el('li', undefined, `activity-event ${kindClass}`);
-          const date = new Date(event.timestamp), time = el('time', date.toLocaleString()); time.dateTime = date.toISOString();
+          const date = new Date(event.timestamp), time = el('time', formatTimestamp(event.timestamp)); time.dateTime = date.toISOString();
           item.append(el('span', label, 'activity-kind'), time);
           list.append(item);
         }

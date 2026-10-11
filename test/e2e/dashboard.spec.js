@@ -425,6 +425,8 @@ test('shows sanitized chronological per-agent activity and preserves expansion a
   await timeline.locator('summary').click();
   await expect(timeline.locator('.activity-kind')).toHaveText(['Working', 'Permission requested', 'Error']);
   await expect(timeline.locator('time')).toHaveCount(3);
+  await expect(timeline.locator('time').first()).toHaveText('2026-01-01 10:01');
+  await expect(timeline.locator('time').first()).not.toContainText(/seconds|AM|PM/);
   await expect(timeline).not.toContainText('private permission payload');
   await expect(timeline).not.toContainText('raw error detail');
   await expect(timeline).not.toContainText('<script>');
