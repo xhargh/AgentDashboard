@@ -152,7 +152,8 @@ function render() {
         container.open = expandedAgents.has(key);
         container.addEventListener('toggle', () => container.open ? expandedAgents.add(key) : expandedAgents.delete(key));
         const summary = el('summary', undefined, 'agent-tree-summary');
-        summary.append(el('span', `${s.title || 'Session'} · ${display.label}`, 'tree-title'), el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
+         summary.append(el('span', `${s.title || 'Session'} · ${display.label}`, 'tree-title'), el('span', display.label, `badge ${display.className}`));
+         if (children.length) summary.append(el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
         if (classification.attentionRequired) summary.append(el('span', 'Attention in this branch', 'attention-summary'));
         container.append(summary);
       }
@@ -204,8 +205,10 @@ function render() {
   }
   for (const [id, heading, description, items] of groups) {
     if (!items.length && id !== 'needs-attention') continue;
-    const section = el('section', undefined, `session-group group-${id}`);
-    const title = el('div', undefined, 'group-heading');
+    const section = el('details', undefined, `session-group group-${id}`);
+    section.dataset.agentKey = `group:${id}`;
+    section.open = true;
+    const title = el('summary', undefined, 'group-heading');
     const h = el('h2', `${heading} · ${items.length}`); h.id = `group-${id}-heading`;
     title.append(h, el('p', description, 'muted')); section.append(title);
     if (!items.length) section.append(el('p', 'Nothing needs your attention right now.', 'empty'));
