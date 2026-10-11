@@ -52,6 +52,8 @@ code { color: var(--muted); overflow-wrap: anywhere; }
 main { max-width: 1240px; margin: auto; padding: 36px 40px 64px; min-height: calc(100vh - 140px); }
 .intro { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 32px; }
 footer { max-width: 1240px; margin: auto; padding: 20px 40px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 16px; color: var(--muted); font-size: 11px; }
+footer a { color: inherit; }
+footer a:hover { color: var(--text); }
 .footer-separator { padding: 0 9px; color: #64726a; }
 
 /* One overview strip, rather than four competing cards. */
