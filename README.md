@@ -94,7 +94,7 @@ Privacy filtering limits report contents, but does not encrypt a connection. Net
 
 ## Desktop window prototype (Linux)
 
-The optional Tauri prototype opens the dashboard in a native window at `http://127.0.0.1:4317`. Start the companion separately first (`npm start` from this checkout); the desktop window does not launch or stop it. The wrapper navigates directly to the companion, so the dashboard and its `/api/state` requests retain the companion's HTTP loopback origin. No local-mode security checks have been changed to accommodate the webview. A branded system-tray icon toggles the window on a left click and its tooltip summarizes online instances, sessions, and sessions needing attention. Tooltip availability and presentation depend on the desktop environment; environments without tray support continue with the window alone.
+The optional Tauri prototype opens the dashboard in a native AgentDashboard window at `http://127.0.0.1:4317`. Start the companion separately first (`npm start` from this checkout); the desktop window does not launch or stop it. The wrapper navigates directly to the companion, so the dashboard and its `/api/state` requests retain the companion's HTTP loopback origin. No local-mode security checks have been changed to accommodate the webview. A branded system-tray icon toggles the window on a left click and its tooltip summarizes online instances, sessions, and sessions needing attention. Tooltip availability and presentation depend on the desktop environment; environments without tray support continue with the window alone.
 
 Build a Linux x86_64 executable with Docker BuildKit (no host Rust, Tauri CLI, Node.js, or webview development packages required):
 
@@ -102,7 +102,7 @@ Build a Linux x86_64 executable with Docker BuildKit (no host Rust, Tauri CLI, N
 DOCKER_BUILDKIT=1 docker build -f Dockerfile.tauri --output type=local,dest=dist .
 ```
 
-Docker needs access to download the Rust base image, Debian packages, and Cargo crates. The resulting `dist/opencode-supervisor-desktop` targets Linux x86_64 and is dynamically linked. It needs an active X11 or Wayland desktop session, GTK 3, WebKit2GTK 4.1, librsvg, and the runtime dependencies of those libraries. On Debian/Ubuntu install the main runtime packages with:
+Docker needs access to download the Rust base image, Debian packages, and Cargo crates. The resulting `dist/AgentDashboard` executable targets Linux x86_64 and is dynamically linked. It needs an active X11 or Wayland desktop session, GTK 3, WebKit2GTK 4.1, librsvg, and the runtime dependencies of those libraries. On Debian/Ubuntu install the main runtime packages with:
 
 ```bash
 sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0 librsvg2-2
@@ -111,8 +111,8 @@ sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0 librsvg2-2
 Then, with the companion running:
 
 ```bash
-chmod +x dist/opencode-supervisor-desktop
-./dist/opencode-supervisor-desktop
+chmod +x dist/AgentDashboard
+./dist/AgentDashboard
 ```
 
 This is a prototype executable only: no installer, updater, bundled Node runtime, or companion lifecycle management is included. Cross-platform builds are not covered.

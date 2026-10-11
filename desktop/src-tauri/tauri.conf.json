@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "OpenCode Supervisor",
+  "productName": "AgentDashboard",
   "version": "0.1.0",
-  "identifier": "dev.opencodesupervisor.desktop",
+  "identifier": "dev.agentdashboard.desktop",
   "build": {
     "frontendDist": "../../public"
   },
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "OpenCode Supervisor",
+        "title": "AgentDashboard",
         "width": 1280,
         "height": 800,
         "url": "http://127.0.0.1:4317"

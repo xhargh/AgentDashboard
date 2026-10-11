@@ -11,7 +11,7 @@ COPY public /src/public
 RUN mkdir -p icons && python3 -c 'import struct,zlib; p=b"\x00\x00\x00\x00\x00"; chunk=lambda t,d: struct.pack(">I",len(d))+t+d+struct.pack(">I",zlib.crc32(t+d)&0xffffffff); open("icons/icon.png","wb").write(b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",struct.pack(">2I5B",1,1,8,6,0,0,0))+chunk(b"IDAT",zlib.compress(p))+chunk(b"IEND",b""))'
 RUN cargo install tauri-cli --version '=2.12.2' --locked
 RUN cargo tauri build --no-bundle -- --locked \
-    && install -D target/release/opencode-supervisor-desktop /out/opencode-supervisor-desktop
+    && install -D target/release/agent-dashboard /out/AgentDashboard
 
 FROM scratch AS artifact
-COPY --from=build /out/opencode-supervisor-desktop /opencode-supervisor-desktop
+COPY --from=build /out/AgentDashboard /AgentDashboard

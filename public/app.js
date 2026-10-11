@@ -206,7 +206,7 @@ function render() {
       container.append(summary);
       const card = el('article', undefined, 'session-card');
       if (!i.machineId) {
-        card.append(el('p', 'This instance is using a legacy host-based identity because its report has no machine ID. Update or reinstall the OpenCode Supervisor plugin to use a stable machine identity.', 'instance-warning'));
+        card.append(el('p', 'This instance is using a legacy host-based identity because its report has no machine ID. Update or reinstall the AgentDashboard plugin to use a stable machine identity.', 'instance-warning'));
       }
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div', undefined, 'session-info');
       info.append(el('p', `Computer ${i.host} · OpenCode instance PID ${i.pid ?? 'unknown'} · ${s.directory || i.directory || 'unknown path'}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
@@ -336,9 +336,9 @@ async function poll() {
     const online = instances.filter(instance => instance.online);
     const sessions = online.flatMap(instance => instance.sessions || []);
     const attention = sessions.filter(session => ['waiting', 'error'].includes(session.status)).length;
-    updateTrayStatus(`OpenCode Supervisor · ${online.length} instance${online.length === 1 ? '' : 's'} · ${sessions.length} sessions${attention ? ` · ${attention} need attention` : ''}`);
+    updateTrayStatus(`AgentDashboard · ${online.length} instance${online.length === 1 ? '' : 's'} · ${sessions.length} sessions${attention ? ` · ${attention} need attention` : ''}`);
     document.querySelectorAll('details[data-instance]').forEach(n => n.open = open.has(n.dataset.instance));
-  } catch (e) { revision = null; initializedAttention = false; previousStatuses.clear(); $('connection').textContent = '○ Disconnected · retrying'; $('connection').dataset.state = 'disconnected'; $('error').textContent = e.message; updateTrayStatus('OpenCode Supervisor · Disconnected'); if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
+  } catch (e) { revision = null; initializedAttention = false; previousStatuses.clear(); $('connection').textContent = '○ Disconnected · retrying'; $('connection').dataset.state = 'disconnected'; $('error').textContent = e.message; updateTrayStatus('AgentDashboard · Disconnected'); if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
   finally { pending = false; }
 }
 $('login').addEventListener('submit', e => { e.preventDefault(); token = $('token').value.trim(); $('token').value = ''; void poll(); });

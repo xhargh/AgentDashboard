@@ -29,7 +29,7 @@ fn main() {
             }
             let tray = TrayIconBuilder::with_id("main")
                 .icon(Image::new_owned(pixels, 32, 32))
-                .tooltip("OpenCode Supervisor · Connecting")
+                .tooltip("AgentDashboard · Connecting")
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
@@ -55,5 +55,5 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("failed to run OpenCode Supervisor desktop window");
+        .expect("failed to run AgentDashboard desktop window");
 }
