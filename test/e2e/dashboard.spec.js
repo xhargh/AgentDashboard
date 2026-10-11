@@ -148,6 +148,22 @@ test('all agent status groups can be folded and unfolded', async ({ page }) => {
   await expect(waiting.locator('[data-agent-key="instance-beta:root-beta"]')).toBeHidden();
 });
 
+test('leaf subagents can be folded and unfolded like parent sessions', async ({ page }) => {
+  await installStateFixture(page, () => report());
+  await page.goto('/');
+  const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
+  await root.locator(':scope > summary').click();
+  const child = page.locator('details[data-agent-key="instance-alpha:child-alpha"]');
+  await expect(child).toHaveAttribute('open', '');
+  await expect(child.locator(':scope > article.session-card')).toBeVisible();
+
+  await child.locator(':scope > summary').click();
+  await expect(child).not.toHaveAttribute('open', '');
+  await expect(child.locator(':scope > article.session-card')).toBeHidden();
+  await child.locator(':scope > summary').click();
+  await expect(child.locator(':scope > article.session-card')).toBeVisible();
+});
+
 test('folded Git workspace summarizes changes, worktrees, and last commit', async ({ page }) => {
   await installStateFixture(page, () => report());
   await page.goto('/');

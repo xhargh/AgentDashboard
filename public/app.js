@@ -7,6 +7,7 @@ const originalTitle = document.title;
 const numberFormat = new Intl.NumberFormat();
 const machineKey = i => i.machineId || `legacy:${i.host}`;
 const expandedAgents = new Set();
+const collapsedAgents = new Set();
 const expandedActivity = new Set();
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 function formatTimestamp(value) {
@@ -176,18 +177,19 @@ function render() {
       if (!hasEligible(node)) return;
       const { session: s, children } = node, classification = classificationsFor(i).get(s.id);
       const display = sessionState(s, i.online, classification), key = `${i.instanceId}:${s.id}`;
-      const container = children.length ? el('details', undefined, 'agent-tree') : el('div', undefined, 'agent-tree');
+      const container = el('details', undefined, 'agent-tree');
       container.dataset.agentKey = key;
-      if (container.tagName === 'DETAILS') {
-        container.open = expandedAgents.has(key);
-        container.addEventListener('toggle', () => container.open ? expandedAgents.add(key) : expandedAgents.delete(key));
-        const summary = el('summary', undefined, 'agent-tree-summary');
-          summary.append(el('span', `${s.title || 'Session'} · ${display.label}`, 'tree-title'));
-          if (!container.open) summary.append(el('span', display.label, `badge ${display.className}`));
-         if (children.length) summary.append(el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
-        if (classification.attentionRequired) summary.append(el('span', 'Attention in this branch', 'attention-summary'));
-        container.append(summary);
-      }
+      container.open = children.length ? expandedAgents.has(key) : !collapsedAgents.has(key);
+      container.addEventListener('toggle', () => {
+        if (container.open) { expandedAgents.add(key); collapsedAgents.delete(key); }
+        else { expandedAgents.delete(key); collapsedAgents.add(key); }
+      });
+      const summary = el('summary', undefined, 'agent-tree-summary');
+      summary.append(el('span', `${s.title || 'Session'} · ${display.label}`, 'tree-title'));
+      if (!container.open) summary.append(el('span', display.label, `badge ${display.className}`));
+      if (children.length) summary.append(el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
+      if (classification.attentionRequired) summary.append(el('span', 'Attention in this branch', 'attention-summary'));
+      container.append(summary);
       const card = el('article', undefined, 'session-card');
       if (!i.machineId) {
         card.append(el('p', 'This instance is using a legacy host-based identity because its report has no machine ID. Update or reinstall the OpenCode Supervisor plugin to use a stable machine identity.', 'instance-warning'));
