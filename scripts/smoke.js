@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, copyFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { createServer } from '../src/server.js';
+import { installPlugin } from './install-plugin.js';
 
 const dir = await mkdtemp(join(tmpdir(), 'supervisor-smoke-'));
 const token = randomBytes(32).toString('hex');
@@ -90,10 +91,8 @@ async function session(body) {
 
 let url;
 try {
-  await mkdir(join(dir, '.opencode', 'plugins'), { recursive: true });
   await mkdir(env.HOME, { recursive: true });
-  await copyFile(new URL('../src/plugin.js', import.meta.url), join(dir, '.opencode/plugins/supervisor.js'));
-  await copyFile(new URL('../src/session-lifecycle.js', import.meta.url), join(dir, '.opencode/plugins/session-lifecycle.js'));
+  await installPlugin(dir);
   await listen(companion);
   url = `http://127.0.0.1:${companion.address().port}`;
 

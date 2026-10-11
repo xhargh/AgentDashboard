@@ -108,7 +108,7 @@ export function retryDelay(failures, random = Math.random) {
   return Math.round(ceiling * (0.5 + random() * 0.5));
 }
 
-export const SupervisorPlugin = async ({ directory, worktree, client }) => {
+export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   let privacy;
   try { privacy = telemetryConfig(); } catch (error) { console.warn(`[AgentDashboard] ${error.message}`); return {}; }
   let endpoint;

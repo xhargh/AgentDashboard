@@ -42,7 +42,7 @@ Restart any OpenCode processes that were already running. Repeat in other projec
 node scripts/install-plugin.js /path/to/project
 ```
 
-Use one installation scope per project to avoid loading two copies. The installer replaces `supervisor.js` if previously installed. Re-run it after updating the checkout. Remove that file to uninstall.
+Use one installation scope per project to avoid loading two copies. The installer places a single `AgentDashboardPlugin.js` file in the OpenCode plugins directory and removes files left by older installer versions. Re-run it after updating the checkout. Remove `AgentDashboardPlugin.js` to uninstall.
 
 ## Several computers over a LAN
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm, mkdir, copyFile } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, mkdir, copyFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -49,13 +49,21 @@ test('a configured token enables network binding by default', async t => {
   assert.equal(stdout, 'STARTUP_OK 0.0.0.0');
 });
 
-test('installed plugin loads with its local module dependencies', async t => {
+test('installer creates one loadable AgentDashboard plugin file and removes legacy files', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'supervisor-plugin-install-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
+  const plugins = join(dir, 'opencode/plugins');
+  await mkdir(plugins, { recursive: true });
+  await writeFile(join(plugins, 'supervisor.js'), 'export {};');
+  await writeFile(join(plugins, 'session-lifecycle.js'), 'export {};');
+  await writeFile(join(plugins, 'activity-events.js'), 'export {};');
+  await writeFile(join(plugins, 'session-lifecycle.mjs'), 'export {};');
+  await writeFile(join(plugins, 'activity-events.mjs'), 'export {};');
   await promisify(execFile)('npm', ['run', 'install-plugin'], {
     cwd: new URL('..', import.meta.url), env: { ...process.env, XDG_CONFIG_HOME: dir }, timeout: 10000,
   });
-  const installed = pathToFileURL(join(dir, 'opencode/plugins/supervisor.js')).href;
+  const installed = pathToFileURL(join(plugins, 'AgentDashboardPlugin.js')).href;
   const plugin = await import(installed);
-  assert.equal(typeof plugin.SupervisorPlugin, 'function');
+  assert.equal(typeof plugin.AgentDashboardPlugin, 'function');
+  assert.deepEqual(await readdir(plugins), ['AgentDashboardPlugin.js']);
 });
