@@ -137,6 +137,26 @@ test('local mode hides the computer filter when only one computer is reported', 
   await expect(page.getByLabel('Computer')).toBeHidden();
 });
 
+test('search and expanded agent controls fit mobile, tablet, and desktop widths', async ({ page }) => {
+  const state = report();
+  state.instances[0].machineId = 'machine-alpha';
+  state.instances[0].sessions[0].model = { providerID: 'provider', modelID: 'model', contextLimit: 200000 };
+  state.instances[0].sessions[0].usage = { input: 14000, output: 1000, contextEstimate: 15000 };
+  await installStateFixture(page, () => state);
+  await page.goto('/');
+  await expect(page.getByLabel('Search')).toBeVisible();
+  await page.locator('details[data-agent-key="instance-alpha:root-alpha"] > summary').click();
+  await page.getByText('Filter agents', { exact: true }).click();
+
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(page.getByLabel('Search')).toBeVisible();
+    await expect(page.getByLabel('Computer')).toBeVisible();
+    await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  }
+});
+
 test('network mode requires a token, rejects a bad token, and connects with a valid token', async ({ page }) => {
   await installStateFixture(page, authorization => {
     if (authorization !== `Bearer ${token}`) {

@@ -1,22 +1,58 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentDashboard</title><link rel="stylesheet" href="/style.css"></head><body>
-<header><div><span class="brand">◈</span><strong>AgentDashboard</strong></div><span id="connection" role="status">Disconnected</span></header>
-<main><section class="intro"><div><p class="eyebrow">YOUR AGENT CONTROL ROOM</p><h1>Every agent. One place.</h1><p class="muted">Live activity across your projects and machines.</p></div><button id="logout" hidden>Disconnect</button></section>
-<form id="login" hidden><label for="token">Companion access token</label><div class="row"><input id="token" type="password" required autocomplete="off" placeholder="Paste your SUPERVISOR_TOKEN"><button>Connect</button></div><p class="muted">The token stays in memory for this tab. Reports refresh every two seconds.</p><p id="error" role="alert"></p></form>
-<div id="dashboard" hidden><section id="metrics" class="metrics" aria-label="Agent totals"></section><h2 class="fleet-heading">Agents</h2>
-<details class="filters">
-  <summary>Filter agents</summary>
-  <div class="filter-fields">
-    <label id="computer-filter" for="host">Computer<select id="host"><option value="">All computers</option></select></label>
-    <label for="search">Search<input id="search" type="search" placeholder="Search folder, task, agent…"></label>
-  </div>
-  <div class="filter-options">
-    <label class="filter-option" for="notifications"><input type="checkbox" id="notifications" aria-describedby="notifications-help"><span><strong>Attention notifications</strong><small id="notifications-help">Allow browser notifications for new permission requests and errors. Permission is requested only when enabled.</small></span></label>
-    <label class="filter-option" for="tab-count"><input type="checkbox" id="tab-count"><span><strong>Show attention count in tab title</strong></span></label>
-    <label class="filter-option" for="active"><input type="checkbox" id="active" aria-describedby="active-help"><span><strong>Active only</strong><small id="active-help">Show working agents, permission waits, errors, and parents with child attention.</small></span></label>
-    <label class="filter-option" for="hide-finished"><input type="checkbox" id="hide-finished" checked aria-describedby="finished-help"><span><strong>Hide finished subagents</strong><small id="finished-help">Hide idle subagents until they resume. Main agents stay visible unless Active only is enabled.</small></span></label>
-    <label class="filter-option" for="hide-waiting"><input type="checkbox" id="hide-waiting" aria-describedby="waiting-help"><span><strong>Hide agents waiting for input</strong><small id="waiting-help">Hide idle main agents until you send them another message.</small></span></label>
-    <label class="filter-option" for="hide-offline"><input type="checkbox" id="hide-offline" checked aria-describedby="offline-help"><span><strong>Hide offline agents</strong><small id="offline-help">Hide instances that have stopped reporting to the companion.</small></span></label>
-  </div>
-</details>
-<div id="fleet"></div></div>
-</main><footer>AgentDashboard · Read-only monitoring · Offline after 20 seconds without a heartbeat</footer><script type="module" src="/app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#111416">
+  <title>AgentDashboard</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to dashboard</a>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="wordmark"><span class="brand" aria-hidden="true">a<span></span></span><strong>AgentDashboard</strong><span class="workspace-label">Workspace</span></div>
+      <span id="connection" role="status">Connecting…</span>
+    </div>
+  </header>
+  <main id="main">
+    <section class="intro">
+      <h1>Overview</h1>
+      <button id="logout" class="secondary-button" hidden>Disconnect</button>
+    </section>
+    <form id="login" hidden>
+      <h2>Connect to companion</h2>
+      <label for="token">Companion access token</label>
+      <div class="row"><input id="token" type="password" required autocomplete="off" placeholder="Paste your SUPERVISOR_TOKEN"><button>Connect</button></div>
+      <p class="login-help muted">The token stays in memory for this tab. Reports refresh every two seconds.</p>
+      <p id="error" role="alert"></p>
+    </form>
+    <div id="dashboard" hidden>
+      <section id="metrics" class="metrics" aria-label="Agent totals"></section>
+      <section class="fleet-controls" aria-label="Fleet controls">
+        <div class="fleet-toolbar">
+          <div class="fleet-title"><h2 class="fleet-heading">Agents</h2><span class="live-label"><span aria-hidden="true"></span>Live activity</span></div>
+          <label class="search-field" for="search"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span class="sr-only">Search</span><input id="search" type="search" placeholder="Search agents, tasks, folders…"></label>
+        </div>
+        <details class="filters">
+          <summary><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2.5"/><circle cx="15" cy="17" r="2.5"/></svg>Filter agents</summary>
+          <div class="filter-panel">
+            <div class="filter-fields"><label id="computer-filter" for="host">Computer<select id="host"><option value="">All computers</option></select></label></div>
+            <div class="filter-options">
+              <label class="filter-option" for="active"><input type="checkbox" id="active" aria-describedby="active-help"><span><strong>Active only</strong><small id="active-help">Working agents, permission waits, errors, and parents with child attention.</small></span></label>
+              <label class="filter-option" for="hide-finished"><input type="checkbox" id="hide-finished" checked aria-describedby="finished-help"><span><strong>Hide finished subagents</strong><small id="finished-help">Hide idle subagents until they resume. Main agents stay visible.</small></span></label>
+              <label class="filter-option" for="hide-waiting"><input type="checkbox" id="hide-waiting" aria-describedby="waiting-help"><span><strong>Hide agents waiting for input</strong><small id="waiting-help">Hide idle main agents until you send them another message.</small></span></label>
+              <label class="filter-option" for="hide-offline"><input type="checkbox" id="hide-offline" checked aria-describedby="offline-help"><span><strong>Hide offline agents</strong><small id="offline-help">Hide instances that have stopped reporting to the companion.</small></span></label>
+              <label class="filter-option" for="notifications"><input type="checkbox" id="notifications" aria-describedby="notifications-help"><span><strong>Attention notifications</strong><small id="notifications-help">Browser notifications for new permission requests and errors. Permission is requested when enabled.</small></span></label>
+              <label class="filter-option" for="tab-count"><input type="checkbox" id="tab-count"><span><strong>Attention count in tab title</strong><small>See outstanding requests even when this tab is in the background.</small></span></label>
+            </div>
+          </div>
+        </details>
+      </section>
+      <div id="fleet" aria-label="Agent activity"></div>
+    </div>
+  </main>
+  <footer><span>AgentDashboard <span class="footer-separator">/</span> Read-only monitoring</span><span>Offline after 20 seconds without a heartbeat</span></footer>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

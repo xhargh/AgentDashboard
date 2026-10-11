@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 async function dashboard(t, mode, responder) {
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
   class Element {
-    constructor() { this.children = []; this.value = ''; this.hidden = false; this.handlers = {}; }
+    constructor() { this.children = []; this.value = ''; this.hidden = false; this.handlers = {}; this.dataset = {}; }
     append(...nodes) { this.children.push(...nodes); }
     replaceChildren(...nodes) { this.children = nodes; }
     addEventListener(name, fn) { this.handlers[name] = fn; }
