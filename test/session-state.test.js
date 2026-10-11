@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSessionTree, classifySessions, FINISHED_SUBAGENT_GRACE_MS, isActiveCategory, isFinishedSubagentHidden, sessionState } from '../public/session-state.js';
+import { buildSessionTree, classifySessions, FINISHED_SUBAGENT_GRACE_MS, isActiveCategory, isFinishedSubagentHidden, sessionMatchesSearch, sessionState } from '../public/session-state.js';
 
 test('an idle parent awaiting input is distinct from its three finished subagents', () => {
   const parent = { id: 'main', status: 'idle', activity: 'Ready' };
@@ -89,6 +89,13 @@ test('unknown lifecycle states remain distinct and are not treated as active', (
   assert.equal(isActiveCategory(classification), false);
   assert.equal(sessionState(session, true, classification).label, 'future-opencode-state');
   assert.equal(session.status, 'future-opencode-state');
+});
+
+test('search matches task activity and todo content case-insensitively', () => {
+  const session = { title: 'Review', activity: 'Running tests', todos: [{ content: 'Update deployment notes' }] };
+  assert.equal(sessionMatchesSearch(session, 'DEPLOYMENT'), true);
+  assert.equal(sessionMatchesSearch(session, 'running TESTS'), true);
+  assert.equal(sessionMatchesSearch(session, 'missing'), false);
 });
 
 test('parent summaries inherit attention from children and nested descendants', () => {

@@ -233,6 +233,37 @@ test('renders nested agents, preserves expansion, surfaces descendant attention,
   await expect(child).toHaveAttribute('open', '');
 });
 
+test('searches todo content through nested sessions while preserving ancestor context and filters across polls', async ({ page }) => {
+  let polls = 0;
+  await installStateFixture(page, () => {
+    polls++;
+    const state = report(polls > 1 ? 'Build dashboard updated' : 'Build dashboard');
+    state.instances[0].sessions.push(
+      { id: 'task-child', parentID: 'root-alpha', title: 'Implement details', status: 'busy', directory: '/work/alpha/app', activity: 'Working', todos: [{ status: 'in_progress', content: 'Distinctive nested task text' }] },
+    );
+    return state;
+  });
+  await page.goto('/');
+  await page.getByText('Filter agents').click();
+  await page.getByLabel('Computer').selectOption('alpha');
+  await page.locator('#active').check();
+  await page.getByLabel('Search').fill('distinctive nested task text');
+
+  const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
+  await expect(root).toBeVisible();
+  await expect(root.locator(':scope > summary')).toContainText('Build dashboard');
+  await expect(page.getByText('Implement details', { exact: true })).toBeHidden();
+  await root.locator(':scope > summary').click();
+  await expect(page.getByText('Implement details', { exact: true })).toBeVisible();
+  await expect(page.getByText('Distinctive nested task text')).toBeVisible();
+
+  await expect(page.getByText('Build dashboard updated', { exact: true })).toBeVisible();
+  await expect(page.locator('#host')).toHaveValue('legacy:alpha');
+  await expect(page.locator('#active')).toBeChecked();
+  await expect(page.locator('#search')).toHaveValue('distinctive nested task text');
+  await expect(root).toHaveAttribute('open', '');
+});
+
 test('shows sanitized chronological per-agent activity and preserves expansion across polls', async ({ page }) => {
   let polls = 0;
   await installStateFixture(page, () => {

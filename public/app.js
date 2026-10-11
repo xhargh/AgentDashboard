@@ -1,4 +1,4 @@
-import { buildSessionTree, classifySessions, isActiveCategory, isFinishedSubagentHidden, sessionState } from './session-state.js';
+import { buildSessionTree, classifySessions, isActiveCategory, isFinishedSubagentHidden, sessionMatchesSearch, sessionState } from './session-state.js';
 const $ = id => document.getElementById(id);
 let token = '', instances = [], revision = null, pending = false, authRequired = false;
 const machineKey = i => i.machineId || `legacy:${i.host}`;
@@ -48,9 +48,9 @@ function render() {
       if ($('hide-finished').checked && isFinishedSubagentHidden(s)) continue;
       if ($('hide-waiting').checked && i.online && !s.parentID && classification.category === 'waiting-for-input' && !classification.childAttentionCount) continue;
       if ($('active').checked && (!i.online || !isActiveCategory(classification))) continue;
-      const context = `${i.host} ${i.directory} ${s.title} ${s.directory} ${s.activity} ${s.agent}`;
-      if (!context.toLowerCase().includes(query)) continue;
-      eligible.add(s.id);
+      if (!sessionMatchesSearch(s, query, i.host, i.directory)) continue;
+      const group = groups.find(([category]) => category === classification.category);
+      if (group) eligible.add(s.id);
     }
     function hasEligible(node) { return eligible.has(node.session.id) || node.children.some(hasEligible); }
     if (!i.online && i.sessions.length === 0) groups.find(([id]) => id === 'offline')[3].push({ i, instanceOnly: true });
