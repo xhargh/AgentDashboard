@@ -202,10 +202,10 @@ test('shows independent model, context, and token metrics and updates after comp
     polls++;
     const state = report();
     const root = state.instances[0].sessions[0];
-    root.model = { providerID: 'provider-a', modelID: 'model-a', name: 'Friendly A', variant: 'high', contextLimit: 200000 };
+    root.model = { providerID: 'provider-a', modelID: 'model-a', providerName: 'Provider A', name: 'Friendly A', variant: 'high', contextLimit: 200000 };
     root.usage = { input: 140000, output: 10000, reasoning: 1200, cacheRead: 0, cacheWrite: 30, contextEstimate: polls < 3 ? 150000 : 25000, partial: false };
     const child = state.instances[0].sessions.find(session => session.id === 'child-alpha');
-    child.model = { providerID: 'provider-b', modelID: 'model-b', contextLimit: 200000 };
+    child.model = { providerID: 'provider-b', modelID: 'model-b', providerName: 'Provider B', contextLimit: 200000 };
     child.usage = { input: 7, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, contextEstimate: 180000, partial: false };
     return state;
   });
@@ -213,7 +213,7 @@ test('shows independent model, context, and token metrics and updates after comp
   const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
   await root.locator(':scope > summary').click();
   const rootCard = root.locator(':scope > article.session-card');
-  await expect(rootCard.locator('.model-label')).toHaveText('provider-a / Friendly A');
+  await expect(rootCard.locator('.model-label')).toHaveText('Provider A / Friendly A');
   await expect(rootCard.locator('.variant-label')).toHaveText('high variant');
   await expect(rootCard.locator('.context-metric')).toContainText('150,000 / 200,000 (75%)');
   await expect(rootCard.locator('.context-warning-text')).toHaveText('Context estimate is at least 75%');
@@ -225,8 +225,8 @@ test('shows independent model, context, and token metrics and updates after comp
 
   const child = page.locator('[data-agent-key="instance-alpha:child-alpha"]');
   const childCard = child.locator(':scope > article.session-card');
-  await expect(childCard.locator('.model-label')).toHaveText('provider-b / model-b');
-  await expect(childCard.locator('.variant-label')).toHaveText('Default variant');
+  await expect(childCard.locator('.model-label')).toHaveText('Provider B / model-b');
+  await expect(childCard.locator('.variant-label')).toHaveText('Variant unavailable');
   await expect(childCard.locator('.context-warning-text')).toHaveText('Context estimate is at least 90%');
   await expect(childCard.locator('.usage-metric')).toContainText('12 input + output tokens');
 

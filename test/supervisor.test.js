@@ -91,23 +91,36 @@ test('reports assistant model metadata per session and filters it at the outboun
   const reports = [];
   globalThis.fetch = async (_url, init) => { reports.push(JSON.parse(init.body)); return new Response('', { status: 200 }); };
   const client = { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) }, config: { providers: async () => ({ data: { providers: [
-    { id: 'provider-a', models: { 'model-x': { name: 'Friendly Model', limit: { context: 128000 } } } },
+    { id: 'provider-a', name: 'Provider A', models: { 'model-x': { name: 'Friendly Model', limit: { context: 128000 } } } },
+    { id: 'provider-b', name: 'Provider B', models: { 'model-y': { name: 'Friendly B', limit: { context: 64000 } } } },
   ] } }) } };
   const plugin = await AgentDashboardPlugin({ directory: '/tmp', client });
   t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
   await plugin.event({ event: { type: 'message.updated', properties: { info: {
-    id: 'message-1', sessionID: 'parent', role: 'assistant', providerID: 'provider-a', modelID: 'model-x', variant: 'high',
+    id: 'message-1', sessionID: 'parent', role: 'assistant', time: { created: 1, completed: 2 }, parentID: 'root',
+    providerID: 'provider-a', modelID: 'model-x', mode: 'build', path: { cwd: '/tmp', root: '/tmp' }, cost: 0,
+    tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 1, write: 0 } }, finish: 'stop',
   } } } });
   await plugin.event({ event: { type: 'message.updated', properties: { info: {
-    id: 'message-2', sessionID: 'child', role: 'assistant', providerID: 'provider-b', modelID: 'model-y',
+    id: 'message-2', sessionID: 'child', role: 'assistant', providerID: 'provider-b', modelID: 'model-z',
   } } } });
   for (let n = 0; n < 100 && !reports.some(r => r.sessions.some(s => s.id === 'child')); n++) await new Promise(resolve => setTimeout(resolve, 10));
   await new Promise(resolve => setTimeout(resolve, 20));
   const sessions = reports.at(-1).sessions;
   assert.deepEqual(sessions.find(s => s.id === 'parent').model, {
-    providerID: 'provider-a', modelID: 'model-x', variant: 'high', name: 'Friendly Model', contextLimit: 128000,
+    providerID: 'provider-a', modelID: 'model-x', providerName: 'Provider A', name: 'Friendly Model', contextLimit: 128000,
   });
-  assert.deepEqual(sessions.find(s => s.id === 'child').model, { providerID: 'provider-b', modelID: 'model-y' });
+  assert.deepEqual(sessions.find(s => s.id === 'child').model, { providerID: 'provider-b', modelID: 'model-z' });
+  await plugin.event({ event: { type: 'message.updated', properties: { info: {
+    id: 'message-3', sessionID: 'parent', role: 'assistant', providerID: 'provider-b', modelID: 'model-y',
+  } } } });
+  await new Promise(resolve => setTimeout(resolve, 280));
+  const switched = reports.at(-1).sessions;
+  assert.deepEqual(switched.find(s => s.id === 'parent').model, {
+    providerID: 'provider-b', modelID: 'model-y', providerName: 'Provider B', name: 'Friendly B', contextLimit: 64000,
+  });
+  assert.deepEqual(switched.find(s => s.id === 'child').model, { providerID: 'provider-b', modelID: 'model-z' },
+    'one session model switch does not overwrite another session metadata');
 
   process.env.OPENCODE_SUPERVISOR_TELEMETRY = '{"modelMetrics":false}';
   const filtered = await AgentDashboardPlugin({ directory: '/tmp', client });

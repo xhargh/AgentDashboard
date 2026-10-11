@@ -112,3 +112,24 @@ test('sustained multi-machine nested workload recovers across outage/restart wit
   const heapGrowth = process.memoryUsage().heapUsed - baseline;
   assert.ok(heapGrowth < 64 * 1024 * 1024, `heap grew by ${heapGrowth} bytes during bounded workload`);
 });
+
+test('retains a maximum-size metrics report within the body budget without ETag churn', async () => {
+  const send = endpoint();
+  const value = {
+    instanceId: 'metrics-fleet', host: 'metrics-host', sessions: Array.from({ length: 1000 }, (_, index) => ({
+      id: `session-${index}`, status: 'busy', parentID: index ? 'session-0' : undefined,
+      model: { providerID: 'provider-id', providerName: 'Friendly Provider', modelID: 'model-id', name: 'Friendly Model', variant: 'reasoning-high', contextLimit: 200000 },
+      usage: { input: 90000, output: 10000, reasoning: 1000, cacheRead: 3000, cacheWrite: 250, contextEstimate: 93000, partial: false },
+    })),
+  };
+  const body = JSON.stringify(value);
+  assert.ok(Buffer.byteLength(body) < 1024 * 1024);
+  assert.equal((await send('/api/report', { method: 'POST', body })).status, 200);
+  const snapshot = await send('/api/state');
+  assert.equal(snapshot.status, 200);
+  const state = await snapshot.json();
+  assert.equal(state.instances[0].sessions.length, 1000);
+  assert.equal(state.instances[0].sessions[999].usage.contextEstimate, 93000);
+  assert.equal((await send('/api/report', { method: 'POST', body })).status, 200);
+  assert.equal((await send('/api/state', { headers: { 'if-none-match': snapshot.headers.get('etag') } })).status, 304);
+});

@@ -76,6 +76,8 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
     if (privacy.tasks && session.todos) result.todos = session.todos;
     if (privacy.modelMetrics && session.model) result.model = session.model;
     if (privacy.modelMetrics && session.usage) result.usage = session.usage;
+    for (const key of ['firstObservedAt', 'lastActivityAt', 'stateChangedAt']) if (session[key] !== undefined) result[key] = session[key];
+    if (session.restored) result.restored = true;
     return result;
   }) };
   if (events?.length) report.events = events;
@@ -176,7 +178,7 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
       const providers = response?.data?.providers || response?.providers || [];
       const providerModels = new Map();
       for (const provider of providers) for (const [id, model] of Object.entries(provider.models || {})) {
-        providerModels.set(`${provider.id}:${id}`, { name: model.name, contextLimit: model.limit?.context });
+        providerModels.set(`${provider.id}:${id}`, { providerName: provider.name, name: model.name, contextLimit: model.limit?.context });
       }
       return providerModels;
       } catch { return undefined; }
@@ -288,6 +290,7 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           void loadProviderModels().then(models => {
             const configured = models?.get(`${model.providerID}:${model.modelID}`);
             if (!configured || s.model !== model) return;
+            if (typeof configured.providerName === 'string') model.providerName = configured.providerName.slice(0, 200);
             if (typeof configured.name === 'string') model.name = configured.name.slice(0, 200);
             if (Number.isSafeInteger(configured.contextLimit) && configured.contextLimit >= 0) model.contextLimit = configured.contextLimit;
             if (Number.isSafeInteger(model.contextLimit) && s.latestUsage) {
