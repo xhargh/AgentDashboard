@@ -206,7 +206,7 @@ test('shows independent model, context, and token metrics and updates after comp
     root.usage = { input: 140000, output: 10000, reasoning: 1200, cacheRead: 0, cacheWrite: 30, contextEstimate: polls < 3 ? 150000 : 25000, partial: false };
     const child = state.instances[0].sessions.find(session => session.id === 'child-alpha');
     child.model = { providerID: 'provider-b', modelID: 'model-b', contextLimit: 200000 };
-    child.usage = { input: 179000, output: 1000, reasoning: 0, cacheRead: 0, cacheWrite: 0, contextEstimate: 180000, partial: false };
+    child.usage = { input: 7, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, contextEstimate: 180000, partial: false };
     return state;
   });
   await page.goto('/');
