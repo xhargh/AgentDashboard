@@ -18,6 +18,12 @@ function validModel(model) {
     (model.name === undefined || boundedString(model.name, 200)) &&
     (model.contextLimit === undefined || Number.isSafeInteger(model.contextLimit) && model.contextLimit >= 0);
 }
+function validUsage(usage) {
+  return usage && typeof usage === 'object' && !Array.isArray(usage) &&
+    ['input', 'output', 'reasoning', 'cacheRead', 'cacheWrite', 'contextEstimate'].every(key =>
+      usage[key] === undefined || Number.isSafeInteger(usage[key]) && usage[key] >= 0) &&
+    (usage.partial === undefined || typeof usage.partial === 'boolean');
+}
 function validReport(v) {
   return v && typeof v.instanceId === 'string' && v.instanceId.length <= 100 &&
     (v.machineId === undefined || boundedString(v.machineId, 100)) && boundedString(v.host, 200) &&
@@ -27,7 +33,7 @@ function validReport(v) {
     Array.isArray(v.sessions) && v.sessions.length <= LIMITS.sessionsPerReport && v.sessions.every(s => s && boundedString(s.id, 200) &&
       boundedString(s.status, 40) && (s.title === undefined || boundedString(s.title)) && (s.directory === undefined || boundedString(s.directory)) &&
        (s.activity === undefined || boundedString(s.activity)) && (s.agent === undefined || boundedString(s.agent, 200)) &&
-       (s.model === undefined || validModel(s.model)) &&
+       (s.model === undefined || validModel(s.model)) && (s.usage === undefined || validUsage(s.usage)) &&
       (s.parentID === undefined || boundedString(s.parentID, 200)) && (s.todos === undefined || Array.isArray(s.todos) && s.todos.length <= 200 &&
         s.todos.every(todo => todo && boundedString(todo.content) && boundedString(todo.status, 40)))) &&
     (v.git === undefined || v.git && typeof v.git === 'object' && !Array.isArray(v.git) &&

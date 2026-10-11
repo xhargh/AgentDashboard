@@ -9,6 +9,45 @@ import { createActivityBuffer } from './activity-events.js';
 const exec = promisify(execFile);
 
 const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics'];
+const MAX_USAGE_MESSAGES = 100;
+const USAGE_KEYS = [['input', 'input'], ['output', 'output'], ['reasoning', 'reasoning'], ['cacheRead', 'cache', 'read'], ['cacheWrite', 'cache', 'write']];
+function messageUsage(info) {
+  const tokens = info.tokens;
+  if (!tokens || typeof tokens !== 'object') return undefined;
+  const usage = {};
+  for (const [name, key, nested] of USAGE_KEYS) {
+    const value = nested ? tokens[key]?.[nested] : tokens[key];
+    if (Number.isSafeInteger(value) && value >= 0) usage[name] = value;
+  }
+  return Object.keys(usage).length ? usage : undefined;
+}
+function updateUsage(session, info) {
+  const messageId = info.id;
+  const snapshot = messageUsage(info);
+  if (!messageId || !snapshot) return;
+  session.usageMessages ||= new Map();
+  const previous = session.usageMessages.get(messageId) || {};
+  session.usageMessages.delete(messageId);
+  session.usageMessages.set(messageId, { ...previous, ...snapshot });
+  while (session.usageMessages.size > MAX_USAGE_MESSAGES) {
+    session.usageMessages.delete(session.usageMessages.keys().next().value);
+    session.usageTruncated = true;
+  }
+  const totals = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
+  for (const message of session.usageMessages.values()) for (const key of Object.keys(totals)) {
+    totals[key] = Math.min(Number.MAX_SAFE_INTEGER, totals[key] + (message[key] || 0));
+  }
+  session.usage = { ...totals, partial: Boolean(session.usageTruncated) };
+  const timestamp = Number(info.time?.created) || Number(info.time?.completed) || 0;
+  if (!session.latestUsage || timestamp >= session.latestUsage.timestamp) {
+    const latest = session.usageMessages.get(messageId);
+    session.latestUsage = { timestamp, input: latest.input, cacheRead: latest.cacheRead };
+    if (Number.isSafeInteger(session.model?.contextLimit)) {
+      const occupied = [session.latestUsage.input, session.latestUsage.cacheRead].filter(Number.isSafeInteger);
+      if (occupied.length) session.usage.contextEstimate = occupied.reduce((sum, value) => sum + value, 0);
+    }
+  }
+}
 function telemetryConfig(value = process.env.OPENCODE_SUPERVISOR_TELEMETRY) {
   if (value === undefined || value === '') return Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, true]));
   let config;
@@ -36,6 +75,7 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
     if (privacy.toolActivity && session.agent) result.agent = session.agent;
     if (privacy.tasks && session.todos) result.todos = session.todos;
     if (privacy.modelMetrics && session.model) result.model = session.model;
+    if (privacy.modelMetrics && session.usage) result.usage = session.usage;
     return result;
   }) };
   if (events?.length) report.events = events;
@@ -125,22 +165,23 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   const generationStartedAt = Date.now();
   const machine = await machineId();
   const sessions = new Map();
-  let providerModels;
-  let providerModelsLoaded = false;
-  const loadProviderModels = async () => {
-    if (providerModelsLoaded) return providerModels;
-    providerModelsLoaded = true;
-    try {
+  let providerModelsPromise;
+  const loadProviderModels = () => {
+    if (providerModelsPromise) return providerModelsPromise;
+    providerModelsPromise = (async () => {
+      try {
       const response = await Promise.race([client.config.providers(), new Promise((_, reject) => {
         const timer = setTimeout(() => reject(new Error('timeout')), 1500); timer.unref?.();
       })]);
       const providers = response?.data?.providers || response?.providers || [];
-      providerModels = new Map();
+      const providerModels = new Map();
       for (const provider of providers) for (const [id, model] of Object.entries(provider.models || {})) {
         providerModels.set(`${provider.id}:${id}`, { name: model.name, contextLimit: model.limit?.context });
       }
-    } catch { providerModels = undefined; }
-    return providerModels;
+      return providerModels;
+      } catch { return undefined; }
+    })();
+    return providerModelsPromise;
   };
   const activityEvents = createActivityBuffer();
   let gitInfo = {}, lastGit = 0, sending = false, stopped = false, dirty = false, eventTimer;
@@ -249,9 +290,14 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
             if (!configured || s.model !== model) return;
             if (typeof configured.name === 'string') model.name = configured.name.slice(0, 200);
             if (Number.isSafeInteger(configured.contextLimit) && configured.contextLimit >= 0) model.contextLimit = configured.contextLimit;
+            if (Number.isSafeInteger(model.contextLimit) && s.latestUsage) {
+              const occupied = [s.latestUsage.input, s.latestUsage.cacheRead].filter(Number.isSafeInteger);
+              if (occupied.length) s.usage.contextEstimate = occupied.reduce((sum, value) => sum + value, 0);
+            }
             scheduleReport();
           });
         }
+        if (p.info.role === 'assistant') updateUsage(s, p.info);
         markActivity(s);
       }
       if (event.type === 'message.part.updated' && p.part?.type === 'tool') {
