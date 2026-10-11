@@ -238,7 +238,7 @@ function render() {
     }
   }
   for (const [id, heading, description, items] of groups) {
-    if (!items.length && id !== 'needs-attention') continue;
+    if (!items.length) continue;
     const section = el('details', undefined, `session-group group-${id}`);
     section.dataset.agentKey = `group:${id}`;
     section.open = true;
