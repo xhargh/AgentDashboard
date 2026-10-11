@@ -149,7 +149,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const server = createServer({ token });
     server.requestTimeout = 10000;
     server.on('error', error => { console.error(`Companion failed: ${error.message}`); process.exitCode = 1; });
-    server.listen(Number(process.env.PORT || 4317), host, () => console.log(`Supervisor ${token ? 'network (token required)' : 'local (no token)'} mode listening on ${host}:${process.env.PORT || 4317}`));
+    server.listen(Number(process.env.PORT || 4317), host, () => console.log(`AgentDashboard ${token ? 'network (token required)' : 'local (no token)'} mode listening on ${host}:${process.env.PORT || 4317}`));
     for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { server.close(); server.closeAllConnections(); });
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

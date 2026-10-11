@@ -372,9 +372,9 @@ test('attention notifications are opt-in, fire once on live transitions, and tab
   await expect.poll(() => page.evaluate(() => window.notificationCalls.length)).toBe(1);
   await expect(page.evaluate(() => window.permissionRequests || 0)).resolves.toBe(0);
   await page.locator('#tab-count').check();
-  await expect(page).toHaveTitle('(2) OpenCode Supervisor');
+  await expect(page).toHaveTitle('(2) AgentDashboard');
   await page.locator('#tab-count').uncheck();
-  await expect(page).toHaveTitle('OpenCode Supervisor');
+  await expect(page).toHaveTitle('AgentDashboard');
   await page.locator('#notifications').uncheck();
 });
 

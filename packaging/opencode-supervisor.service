@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenCode Supervisor dashboard
+Description=AgentDashboard
 After=network.target
 
 [Service]
