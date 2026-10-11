@@ -55,7 +55,11 @@ function report(title = 'Build dashboard', status = 'busy', now = Date.now()) {
             todos: [],
           },
         ],
-        git: { root: '/work/alpha/app', status: 'clean', log: 'abc123 Initial commit', worktrees: '' },
+        git: {
+          root: '/work/alpha/app', status: '## main\n M app.js\n?? scratch.txt',
+          log: 'abc123 2026-01-02T03:04:05+00:00 Initial commit',
+          worktrees: 'worktree /work/alpha/app\nHEAD abc123\nbranch refs/heads/main\n\nworktree /work/alpha/linked\nHEAD def456\nbranch refs/heads/linked',
+        },
       },
       {
         instanceId: 'instance-beta',
@@ -125,6 +129,14 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await page.locator('#active').check();
   await expect(page.getByText('Build dashboard', { exact: true })).toBeVisible();
   await expect(page.locator('.tree-title').filter({ hasText: 'Fix API' })).toHaveCount(0);
+});
+
+test('folded Git workspace summarizes changes, worktrees, and last commit', async ({ page }) => {
+  await installStateFixture(page, () => report());
+  await page.goto('/');
+  const workspace = page.locator('details[data-instance="instance-alpha"]').first();
+  await expect(workspace.locator(':scope > summary')).toHaveText('Git workspace · 2 changes · 2 worktrees · last commit 2026-01-02 03:04');
+  await expect(workspace).not.toHaveAttribute('open', '');
 });
 
 test('local mode hides the computer filter when only one computer is reported', async ({ page }) => {

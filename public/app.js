@@ -14,6 +14,14 @@ function formatTimestamp(value) {
   const pad = number => String(number).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
+function gitSummary(git) {
+  const changes = typeof git.status === 'string'
+    ? git.status.split('\n').filter(line => line && !line.startsWith('##')).length : null;
+  const worktrees = typeof git.worktrees === 'string' ? (git.worktrees.match(/^worktree /gm) || []).length : null;
+  const commitDate = typeof git.log === 'string' ? git.log.split('\n')[0]?.split(/\s+/)[1] : null;
+  const lastCommit = commitDate && Number.isFinite(Date.parse(commitDate)) ? formatTimestamp(commitDate) : 'unavailable';
+  return `Git workspace · ${changes ?? 'unavailable'} change${changes === 1 ? '' : 's'} · ${worktrees ?? 'unavailable'} worktrees · last commit ${lastCommit}`;
+}
 function reconcile(parent, desired) {
   if (!parent.querySelectorAll) { parent.replaceChildren(...desired.children); return; }
   const keyed = new Map([...parent.querySelectorAll('[data-agent-key]')].map(node => [node.dataset.agentKey, node]));
@@ -178,7 +186,7 @@ function render() {
       const state = el('div', undefined, 'session-state'), badge = el('span', display.label, `badge ${display.className}`); badge.title = display.detail;
       state.append(badge, el('small', s.agent || (s.parentID ? 'subagent' : 'agent'))); row.append(info, state); card.append(row, activity);
       if (i.git?.root && !s.parentID) {
-        const details = el('details'); details.dataset.instance = i.instanceId; details.append(el('summary', 'Git workspace'));
+        const details = el('details'); details.dataset.instance = i.instanceId; details.append(el('summary', gitSummary(i.git)));
         const grid = el('div', undefined, 'git-grid');
         for (const [key, label] of [['status', 'Status'], ['log', 'Recent commits'], ['worktrees', 'Worktrees']]) { const block = el('section'); block.append(el('h4', label), el('pre', typeof i.git[key] === 'string' ? i.git[key] || 'Clean / empty' : 'Waiting for Git snapshot')); grid.append(block); }
         details.append(grid); card.append(details);
