@@ -82,6 +82,37 @@ The available categories are `titles`, `tasks`, `toolActivity`, `paths`, and `gi
 
 Privacy filtering limits report contents, but does not encrypt a connection. Network mode over plain HTTP exposes both the bearer token and report data to network observers; use HTTPS (for example, a reverse proxy with TLS) or an encrypted private network, and restrict access to a trusted/private network. The default local mode sends only to loopback and requires no token. Avoid exposing the plain HTTP companion directly to the internet.
 
+## Desktop window prototype (Linux)
+
+The optional Tauri prototype opens the dashboard in a native window at `http://127.0.0.1:4317`. Start the companion separately first (`npm start` from this checkout); the desktop window does not launch or stop it. The wrapper navigates directly to the companion, so the dashboard and its `/api/state` requests retain the companion's HTTP loopback origin. No local-mode security checks have been changed to accommodate the webview.
+
+Build a Linux x86_64 executable with Docker BuildKit (no host Rust, Tauri CLI, Node.js, or webview development packages required):
+
+```bash
+DOCKER_BUILDKIT=1 docker build -f Dockerfile.tauri --output type=local,dest=dist .
+```
+
+Docker needs access to download the Rust base image, Debian packages, and Cargo crates. The resulting `dist/opencode-supervisor-desktop` targets Linux x86_64 and is dynamically linked. It needs an active X11 or Wayland desktop session, GTK 3, WebKit2GTK 4.1, librsvg, and the runtime dependencies of those libraries. On Debian/Ubuntu install the main runtime packages with:
+
+```bash
+sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0 librsvg2-2
+```
+
+Then, with the companion running:
+
+```bash
+chmod +x dist/opencode-supervisor-desktop
+./dist/opencode-supervisor-desktop
+```
+
+This is a prototype executable only: no installer, updater, bundled Node runtime, or companion lifecycle management is included. Cross-platform builds are not covered.
+
+### Local-mode webview validation status
+
+Local mode currently serves the dashboard successfully from loopback (HTTP 200 with the existing restrictive CSP). Direct probes against the running companion rejected a non-local `Host` and a cross-origin `/api/state` request with HTTP 403. The server continues to require a loopback peer and localhost `Host`, and applies same-origin and Fetch Metadata checks to API requests.
+
+The native Tauri window could not be launched in the implementation environment: the host has no `webkit2gtk-4.1` or GTK development/runtime packages installed. Therefore, acceptance of the actual WebKit request's peer address, `Host`, `Origin`, and Fetch Metadata headers remains unverified here. Since the app navigates to the companion's loopback URL rather than loading a Tauri-origin frontend or proxying requests, it is expected to use the companion origin; confirm on a Linux host with WebKit2GTK 4.1 installed. If native WebKit is rejected, resolve the incompatibility by designing an explicitly constrained same-origin integration and reviewing it against the security model; do not relax local-mode peer, host, origin, or cross-site checks.
+
 ## Run as a Linux user service
 
 Copy `packaging/opencode-supervisor.service` into `~/.config/systemd/user/`. Edit its `WorkingDirectory` and `ExecStart` to match this checkout and the output of `command -v node`.
