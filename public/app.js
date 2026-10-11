@@ -59,7 +59,25 @@ function activityEvents(instance, sessionId) {
     .filter(event => event?.sessionId === sessionId && eventKinds[event.kind] && Number.isFinite(Date.parse(event.timestamp)))
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)).slice(-5);
 }
-function renderMetrics(info, session, online) {
+function descendantSessions(session, sessions) {
+  const children = new Map();
+  for (const candidate of sessions) {
+    if (!candidate.parentID) continue;
+    if (!children.has(candidate.parentID)) children.set(candidate.parentID, []);
+    children.get(candidate.parentID).push(candidate);
+  }
+  const descendants = [], visited = new Set([session.id]);
+  function visit(parentID) {
+    for (const child of children.get(parentID) || []) {
+      if (visited.has(child.id)) continue;
+      visited.add(child.id); descendants.push(child); visit(child.id);
+    }
+  }
+  visit(session.id);
+  return descendants;
+}
+function tokenCount(usage) { return (usage?.input || 0) + (usage?.output || 0); }
+function renderMetrics(info, session, online, sessions) {
   const metrics = el('section', undefined, 'agent-metrics');
   const model = session.model;
   const modelLabel = model?.providerID && (model.name || model.modelID)
@@ -81,9 +99,8 @@ function renderMetrics(info, session, online) {
   } else metrics.append(el('p', 'Context unavailable', 'context-unavailable'));
   if (!usage) metrics.append(el('p', 'Usage pending', 'usage-pending'));
   else {
-    const input = usage.input || 0, output = usage.output || 0;
     const lifetime = el('div', undefined, 'usage-metric');
-    lifetime.append(el('strong', `${numberFormat.format(input + output)} input + output tokens`));
+    lifetime.append(el('strong', `Own · ${numberFormat.format(tokenCount(usage))} input + output tokens`));
     if (usage.partial) lifetime.append(el('small', ' · partial history'));
     if (!online) lifetime.append(el('small', ' · last reported'));
     const breakdown = el('details', undefined, 'usage-breakdown');
@@ -93,6 +110,15 @@ function renderMetrics(info, session, online) {
       list.append(el('dt', label), el('dd', usage[key] === undefined ? 'Unknown' : numberFormat.format(usage[key])));
     }
     breakdown.append(list); metrics.append(lifetime, breakdown);
+  }
+  if (!session.parentID) {
+    const descendants = descendantSessions(session, sessions);
+    if (descendants.length) {
+      const agents = [session, ...descendants], known = agents.filter(candidate => candidate.usage);
+      const total = known.length ? numberFormat.format(known.reduce((sum, candidate) => sum + tokenCount(candidate.usage), 0)) : 'pending';
+      const detail = total === 'pending' ? '' : ` input + output tokens${known.length < agents.length ? ' · some usage pending' : ''}`;
+      metrics.append(el('p', `Total with subagents · ${total}${detail}`, 'aggregate-usage'));
+    }
   }
   info.append(metrics);
 }
@@ -165,7 +191,7 @@ function render() {
       info.append(el('strong', s.title || 'Session'), el('p', i.directory ? `${i.host} · ${i.directory}` : i.host, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
        if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
        if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
-       renderMetrics(info, s, i.online);
+        renderMetrics(info, s, i.online, i.sessions);
       if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
       const events = activityEvents(i, s.id), activityKey = `${i.instanceId}:${s.id}`;
       const activity = el('details', undefined, 'activity-timeline');
