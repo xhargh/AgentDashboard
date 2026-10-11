@@ -252,7 +252,14 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
       const p = event.properties || {};
       if (event.type === 'server.instance.disposed' && p.directory === directory) { stopped = true; clearInterval(timer); clearTimeout(eventTimer); clearTimeout(retryTimer); return; }
       if (event.type === 'session.created' || event.type === 'session.updated') {
-        const existed = sessions.has(p.info?.id); info(p.info);
+        const existed = sessions.has(p.info?.id);
+        if (event.type === 'session.created' && p.info?.id && !p.info.parentID) {
+          const sessionDirectory = p.info.directory || directory;
+          for (const [id, existing] of sessions) {
+            if (id !== p.info.id && !existing.parentID && existing.directory === sessionDirectory) sessions.delete(id);
+          }
+        }
+        info(p.info);
         if (event.type === 'session.created' && !existed) activityEvents.record(p.info.id, 'created');
       }
       if (event.type === 'session.deleted') { activityEvents.record(p.info?.id, 'deleted'); sessions.delete(p.info?.id); }
