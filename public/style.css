@@ -121,7 +121,8 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
 .agent-tree > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); flex-shrink: 0; }
 .agent-tree[open] > summary::before { transform: rotate(45deg); }
 .agent-tree > summary:hover { background: var(--raised); }
-.tree-title { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.tree-title { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; flex: 1; }
+.tree-activity { flex-basis: 100%; margin-left: 18px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .tree-count { font-size: 10px; color: var(--muted); margin-left: auto; white-space: nowrap; }
 .agent-tree > summary .attention-summary { margin: 0; }
 .agent-tree[open] > summary { border-radius: 10px 10px 0 0; background: var(--raised); }
