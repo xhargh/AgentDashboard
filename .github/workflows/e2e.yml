@@ -14,10 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
+      - name: Build test environment
+        run: docker build --tag opencode-supervisor-ci .
+      - name: Run browser tests
+        run: >-
+          docker run --rm
+          --volume "$PWD:/workspace"
+          --workdir /workspace
+          --env CI=1
+          opencode-supervisor-ci

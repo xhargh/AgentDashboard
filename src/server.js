@@ -13,7 +13,10 @@ const LIMITS = Object.freeze({ instances: 2000, sessionsPerReport: 1000, session
 function boundedString(value, max = LIMITS.field) { return typeof value === 'string' && value.length <= max; }
 function validReport(v) {
   return v && typeof v.instanceId === 'string' && v.instanceId.length <= 100 &&
-    (v.machineId === undefined || boundedString(v.machineId, 100)) && boundedString(v.host, 200) && (v.directory === undefined || boundedString(v.directory)) &&
+    (v.machineId === undefined || boundedString(v.machineId, 100)) && boundedString(v.host, 200) &&
+    (v.generationStartedAt === undefined || Number.isFinite(v.generationStartedAt)) &&
+    (v.pid === undefined || Number.isInteger(v.pid)) &&
+    (v.directory === undefined || boundedString(v.directory)) &&
     Array.isArray(v.sessions) && v.sessions.length <= LIMITS.sessionsPerReport && v.sessions.every(s => s && boundedString(s.id, 200) &&
       boundedString(s.status, 40) && (s.title === undefined || boundedString(s.title)) && (s.directory === undefined || boundedString(s.directory)) &&
       (s.activity === undefined || boundedString(s.activity)) && (s.agent === undefined || boundedString(s.agent, 200)) &&
@@ -23,7 +26,8 @@ function validReport(v) {
       Object.entries(v.git).every(([key, value]) => boundedString(key, 100) && (typeof value !== 'string' || boundedString(value)))) &&
     (v.events === undefined || Array.isArray(v.events) && v.events.length <= LIMITS.eventsPerReport && v.events.every(e => e &&
       boundedString(e.sessionId, 200) && boundedString(e.timestamp, 40) && Number.isFinite(Date.parse(e.timestamp)) &&
-      boundedString(e.kind, 40) && boundedString(e.summary, LIMITS.summary)));
+      ['created','busy','idle','waiting','error','retry','permissionAnswered','deleted'].includes(e.kind) &&
+      boundedString(e.summary, LIMITS.summary)));
 }
 export function createServer({ token, now = Date.now } = {}) {
   if (token && token.length < 24) throw new Error('SUPERVISOR_TOKEN must contain at least 24 characters');
@@ -71,7 +75,7 @@ export function createServer({ token, now = Date.now } = {}) {
       if (path === '/api/state' && req.method === 'GET') {
         const time = now();
         for (const instance of instances.values()) {
-          const online = time - instance.lastSeen < 20000;
+          const online = time - instance.lastSeen < 20000 && !instance.replaced;
           if (online !== instance.online) { instance.online = online; revision++; }
         }
         const etag = `"${revision}"`;
@@ -86,7 +90,26 @@ export function createServer({ token, now = Date.now } = {}) {
           const v = JSON.parse(Buffer.concat(chunks).toString());
           if (!validReport(v)) return reply(400, { error: 'Invalid report' });
           if (!instances.has(v.instanceId) && !evictForCapacity(v.instanceId)) return reply(503, { error: 'Instance capacity is occupied by retained active sessions' });
-          const oldCount = instances.has(v.instanceId) ? instances.get(v.instanceId).sessions.length : 0;
+          const seenAt = now();
+          let supersededBy;
+          if (v.machineId && Number.isInteger(v.pid)) {
+            for (const [id, previous] of instances) {
+              if (id === v.instanceId || previous.machineId !== v.machineId || previous.pid !== v.pid) continue;
+              if (Number.isFinite(previous.generationStartedAt) && Number.isFinite(v.generationStartedAt) &&
+                  previous.generationStartedAt > v.generationStartedAt) {
+                supersededBy = previous.instanceId;
+                continue;
+              }
+              if (!previous.replaced) {
+                previous.online = false;
+                previous.replaced = true;
+                previous.replacedBy = v.instanceId;
+                revision++;
+              }
+            }
+          }
+          const previous = instances.get(v.instanceId);
+          const oldCount = previous ? previous.sessions.length : 0;
           if (sessionCount() - oldCount + v.sessions.length > LIMITS.sessionsTotal) {
             while (sessionCount() - oldCount + v.sessions.length > LIMITS.sessionsTotal) {
               const priority = item => item.online && item.sessions.some(s => ['busy', 'retry', 'waiting'].includes(s.status)) ? 2 : item.online ? 1 : 0;
@@ -96,10 +119,11 @@ export function createServer({ token, now = Date.now } = {}) {
               instances.delete(candidates[0][0]); revision++;
             }
           }
-          const previous = instances.get(v.instanceId);
           const online = previous ? now() - previous.lastSeen < 20000 : false;
-          const meaningfulChange = !previous || JSON.stringify({ ...previous, lastSeen: undefined, online: undefined }) !== JSON.stringify(v);
-          instances.set(v.instanceId, { ...v, lastSeen: now(), online: true });
+          const replaced = Boolean(supersededBy || previous?.replaced);
+          const meaningfulChange = !previous || JSON.stringify({ ...previous, lastSeen: undefined, online: undefined, replaced: undefined, replacedBy: undefined }) !== JSON.stringify(v);
+          instances.set(v.instanceId, { ...v, ...(replaced ? { replaced: true, replacedBy: supersededBy || previous.replacedBy } : {}),
+            lastSeen: replaced && previous ? previous.lastSeen : seenAt, online: !replaced });
           let eventCount = [...instances.values()].reduce((count, instance) => count + (instance.events?.length || 0), 0);
           if (eventCount > LIMITS.eventsTotal) {
             for (const instance of [...instances.values()].sort((a, b) => a.lastSeen - b.lastSeen)) {
@@ -107,7 +131,7 @@ export function createServer({ token, now = Date.now } = {}) {
               if (eventCount <= LIMITS.eventsTotal) break;
             }
           }
-          if (meaningfulChange || !online) revision++;
+          if (meaningfulChange || !replaced && !online) revision++;
           return reply(200, { ok: true });
         } catch { return reply(400, { error: 'Invalid JSON report' }); }
       }

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createSession, markActivity, markState } from './session-lifecycle.js';
+import { createActivityBuffer } from './activity-events.js';
 const exec = promisify(execFile);
 
 const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git'];
@@ -25,8 +26,8 @@ function telemetryConfig(value = process.env.OPENCODE_SUPERVISOR_TELEMETRY) {
   if (!categories.paths) categories.git = false;
   return categories;
 }
-function privateReport({ instanceId, machineId, host, pid, directory, worktree, sessions, git }, privacy) {
-  const report = { instanceId, machineId, host, pid, sessions: sessions.map(session => {
+function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events }, privacy) {
+  const report = { instanceId, machineId, generationStartedAt, host, pid, sessions: sessions.map(session => {
     const result = { id: session.id, status: session.status };
     if (session.parentID) result.parentID = session.parentID;
     if (privacy.titles && session.title) result.title = session.title;
@@ -36,6 +37,7 @@ function privateReport({ instanceId, machineId, host, pid, directory, worktree, 
     if (privacy.tasks && session.todos) result.todos = session.todos;
     return result;
   }) };
+  if (events?.length) report.events = events;
   if (privacy.paths) { report.directory = directory; report.worktree = worktree; }
   if (privacy.git) report.git = git;
   return report;
@@ -119,8 +121,10 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
     if (endpoint.hostname === 'localhost') endpoint.hostname = '127.0.0.1';
   }
   const instanceId = randomUUID();
+  const generationStartedAt = Date.now();
   const machine = await machineId();
   const sessions = new Map();
+  const activityEvents = createActivityBuffer();
   let gitInfo = {}, lastGit = 0, sending = false, stopped = false, dirty = false, eventTimer;
   let retryTimer, failures = 0, nextAttempt = 0, lastDiagnostic = 0;
   const session = id => {
@@ -146,8 +150,8 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
       if (privacy.git && Date.now() - lastGit > 10000) { gitInfo = await inspectGit(directory); lastGit = Date.now(); }
       const response = await fetch(new URL('/api/report', endpoint), {
         method: 'POST', redirect: 'error', headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'content-type': 'application/json' },
-        body: JSON.stringify(privateReport({ instanceId, machineId: machine, host: process.env.OPENCODE_SUPERVISOR_HOST || hostname(), pid: process.pid,
-          directory, worktree, sessions: [...sessions.values()], git: gitInfo }, privacy)), signal: AbortSignal.timeout(3000),
+        body: JSON.stringify(privateReport({ instanceId, machineId: machine, generationStartedAt, host: process.env.OPENCODE_SUPERVISOR_HOST || hostname(), pid: process.pid,
+          directory, worktree, sessions: [...sessions.values()], git: gitInfo, events: activityEvents.snapshot() }, privacy)), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {
         noteFailure(reportFailure(response));
@@ -201,15 +205,18 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
     event: async ({ event }) => {
       const p = event.properties || {};
       if (event.type === 'server.instance.disposed' && p.directory === directory) { stopped = true; clearInterval(timer); clearTimeout(eventTimer); clearTimeout(retryTimer); return; }
-      if (event.type === 'session.created' || event.type === 'session.updated') info(p.info);
-      if (event.type === 'session.deleted') sessions.delete(p.info?.id);
+      if (event.type === 'session.created' || event.type === 'session.updated') {
+        const existed = sessions.has(p.info?.id); info(p.info);
+        if (event.type === 'session.created' && !existed) activityEvents.record(p.info.id, 'created');
+      }
+      if (event.type === 'session.deleted') { activityEvents.record(p.info?.id, 'deleted'); sessions.delete(p.info?.id); }
       if (p.sessionID) {
         const s = session(p.sessionID);
-        if (event.type === 'session.status') { markState(s, p.status.type); if (s.status === 'idle') s.activity = 'Ready'; }
-        if (event.type === 'session.idle') { markState(s, 'idle'); s.activity = 'Ready'; }
-        if (event.type === 'session.error') { markState(s, 'error'); s.activity = p.error?.data?.message || 'Session error'; markActivity(s); }
-        if (event.type === 'permission.asked' || event.type === 'permission.updated') { markState(s, 'waiting'); s.activity = 'Waiting for permission'; markActivity(s); }
-        if (event.type === 'permission.replied') { markState(s, 'busy'); s.activity = 'Permission answered'; markActivity(s); }
+        if (event.type === 'session.status') { const changed = markState(s, p.status.type); if (changed) activityEvents.record(s.id, p.status.type); if (s.status === 'idle') s.activity = 'Ready'; }
+        if (event.type === 'session.idle') { if (markState(s, 'idle')) activityEvents.record(s.id, 'idle'); s.activity = 'Ready'; }
+        if (event.type === 'session.error') { if (markState(s, 'error')) activityEvents.record(s.id, 'error'); s.activity = 'Session error'; markActivity(s); }
+        if (event.type === 'permission.asked' || event.type === 'permission.updated') { if (markState(s, 'waiting')) activityEvents.record(s.id, 'waiting'); s.activity = 'Waiting for permission'; markActivity(s); }
+        if (event.type === 'permission.replied') { if (markState(s, 'busy')) activityEvents.record(s.id, 'permissionAnswered'); s.activity = 'Permission answered'; markActivity(s); }
         if (event.type === 'todo.updated') { s.todos = p.todos?.map(t => ({ content: t.content, status: t.status })); markActivity(s); }
       }
       if (event.type === 'message.updated' && p.info?.sessionID) {
@@ -226,7 +233,7 @@ export const SupervisorPlugin = async ({ directory, worktree, client }) => {
       scheduleReport();
     },
     'tool.execute.before': async input => {
-      const s = session(input.sessionID); markState(s, 'busy'); s.activity = `Running ${input.tool}`; markActivity(s); scheduleReport();
+      const s = session(input.sessionID); if (markState(s, 'busy')) activityEvents.record(s.id, 'busy'); s.activity = 'Agent working'; markActivity(s); scheduleReport();
     },
   };
 };
