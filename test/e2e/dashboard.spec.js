@@ -253,6 +253,19 @@ test('folded agent status label follows the latest base-agent status', async ({ 
   await expect(summary.locator('.badge')).toHaveText('Waiting for input');
 });
 
+test('expanded session shows its status badge only in the session content', async ({ page }) => {
+  await installStateFixture(page, () => report());
+  await page.goto('/');
+  const tree = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  const summary = tree.locator(':scope > summary');
+  await expect(summary.locator('.badge')).toHaveCount(1);
+
+  await summary.click();
+  await expect(tree).toHaveAttribute('open', '');
+  await expect(summary.locator('.badge')).toHaveCount(0);
+  await expect(tree.locator(':scope > article.session-card .session-state .badge')).toHaveCount(1);
+});
+
 test('renders status-only instances without optional metadata', async ({ page }) => {
   const now = Date.now();
   await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [{
