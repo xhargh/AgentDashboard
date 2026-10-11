@@ -134,10 +134,11 @@ function render() {
   const sessions = online.flatMap(i => i.sessions.map(s => ({ session: s, classification: classificationsFor(i).get(s.id) })));
   const metrics = el('div');
   metrics.append(...[
-    ['Computers online', new Set(online.map(machineKey)).size], ['OpenCode instances', online.length],
-    ['Active agents', sessions.filter(({ session, classification }) => !session.parentID && isActiveCategory(classification)).length],
-    ['Active subagents', sessions.filter(({ session, classification }) => session.parentID && isActiveCategory(classification)).length],
-  ].map(([label, value]) => { const n = el('article', undefined, 'metric'); n.append(el('span', label), el('strong', value)); return n; }));
+    ['Computers online', new Set(online.map(machineKey)).size, 'Distinct online computers'],
+    ['OpenCode instances', online.length, 'Online instance reports; one computer may run several'],
+    ['Active agents', sessions.filter(({ session, classification }) => !session.parentID && isActiveCategory(classification)).length, 'Top-level sessions needing attention or doing work'],
+    ['Active subagents', sessions.filter(({ session, classification }) => session.parentID && isActiveCategory(classification)).length, 'Child sessions needing attention or doing work'],
+  ].map(([label, value, detail]) => { const n = el('article', undefined, 'metric'); n.append(el('span', label), el('small', detail), el('strong', value)); return n; }));
   reconcile($('metrics'), metrics);
   const selected = $('host').value;
   const machines = new Map(instances.map(i => [machineKey(i), i]));
@@ -153,7 +154,7 @@ function render() {
   const groups = [
     ['needs-attention', 'Needs attention', 'Permission requests and errors', []],
     ['working', 'Working', 'Currently active sessions', []],
-    ['waiting-for-input', 'Waiting for input', 'Idle main agents ready for your next message', []],
+    ['waiting-for-input', 'Waiting for input', 'Idle top-level sessions ready for your next message · count is sessions across all computers and instances', []],
     ['recently-finished', 'Recently finished', 'Completed subagents available if recalled', []],
     ['offline', 'Offline', 'Instances no longer reporting', []],
   ];
@@ -195,7 +196,7 @@ function render() {
         card.append(el('p', 'This instance is using a legacy host-based identity because its report has no machine ID. Update or reinstall the OpenCode Supervisor plugin to use a stable machine identity.', 'instance-warning'));
       }
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div', undefined, 'session-info');
-      info.append(el('strong', s.title || 'Session'), el('p', `${i.host} · ${s.directory || i.directory || 'unknown path'} · ${i.pid ?? 'unknown'}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
+      info.append(el('strong', s.title || 'Session'), el('p', `Computer ${i.host} · OpenCode instance PID ${i.pid ?? 'unknown'} · ${s.directory || i.directory || 'unknown path'}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
        if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
        if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
         renderMetrics(info, s, i.online, i.sessions);

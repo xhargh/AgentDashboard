@@ -108,11 +108,13 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(page.getByText('Approve deployment', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Working · 1' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Waiting for input · 1' })).toBeVisible();
+  await expect(page.getByText('Idle top-level sessions ready for your next message · count is sessions across all computers and instances')).toBeVisible();
+  await expect(page.locator('.metric').filter({ hasText: 'OpenCode instances' })).toContainText('Online instance reports; one computer may run several');
   const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
   await expect(root.locator(':scope > summary')).toContainText('2 children');
   await expect(root.locator(':scope > summary .badge')).toHaveText('busy');
   await root.locator(':scope > summary').click();
-  await expect(root.locator('.session-info > p.muted').first()).toHaveText('alpha · /work/alpha/app · 2101');
+  await expect(root.locator('.session-info > p.muted').first()).toHaveText('Computer alpha · OpenCode instance PID 2101 · /work/alpha/app');
   await expect(page.getByText('Finished review', { exact: true })).toBeVisible();
   await expect(page.getByText('Unknown-age review', { exact: true })).toBeVisible();
 
@@ -291,7 +293,7 @@ test('renders status-only instances without optional metadata', async ({ page })
   }] }));
   await page.goto('/');
 
-  await expect(page.locator('#fleet').getByText('private-host · unknown path · 42', { exact: true })).toBeVisible();
+  await expect(page.locator('#fleet').getByText('Computer private-host · OpenCode instance PID 42 · unknown path', { exact: true })).toBeVisible();
   await expect(page.getByText('Session', { exact: true })).toBeVisible();
   await expect(page.locator('#fleet .badge')).toHaveText('busy');
   await expect(page.getByText('undefined', { exact: true })).toHaveCount(0);
