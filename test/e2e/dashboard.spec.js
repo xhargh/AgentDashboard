@@ -196,6 +196,20 @@ test('renders status-only instances without optional metadata', async ({ page })
   await expect(page.getByText('undefined', { exact: true })).toHaveCount(0);
 });
 
+test('warns per instance when reports use legacy host-based identity', async ({ page }) => {
+  const now = Date.now();
+  await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [
+    { instanceId: 'legacy-instance', host: 'shared-host', online: true, lastSeen: now, sessions: [{ id: 'legacy-session', title: 'Legacy report', status: 'busy' }] },
+    { instanceId: 'current-instance', machineId: 'machine-current', host: 'current-host', online: true, lastSeen: now, sessions: [{ id: 'current-session', title: 'Current report', status: 'busy' }] },
+  ] }));
+  await page.goto('/');
+
+  const legacy = page.locator('[data-agent-key="legacy-instance:legacy-session"] .instance-warning');
+  await expect(legacy).toContainText('legacy host-based identity');
+  await expect(legacy).toContainText('Update or reinstall');
+  await expect(page.locator('[data-agent-key="current-instance:current-session"] .instance-warning')).toHaveCount(0);
+});
+
 test('updates keyed session nodes across rapid state changes and removes deleted sessions', async ({ page }) => {
   let polls = 0;
   await installStateFixture(page, () => {
