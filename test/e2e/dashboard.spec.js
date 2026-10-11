@@ -101,6 +101,7 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await page.clock.install({ time: new Date(120_000) });
   await installStateFixture(page, () => report('Build dashboard', 'busy', 120_000));
   await page.goto('/');
+  await page.locator('#session-sort').selectOption('status');
 
   await expect(page.getByText('● Connected · local only')).toBeVisible();
   await expect(page.locator('.tree-title').filter({ hasText: 'Build dashboard' })).toHaveCount(1);
@@ -143,6 +144,7 @@ test('hides the needs-attention group when no sessions need attention', async ({
     return state;
   });
   await page.goto('/');
+  await page.locator('#session-sort').selectOption('status');
 
   await expect(page.getByRole('heading', { name: /^Needs attention/ })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Working · 1' })).toBeVisible();
@@ -152,6 +154,7 @@ test('hides the needs-attention group when no sessions need attention', async ({
 test('all agent status groups can be folded and unfolded', async ({ page }) => {
   await installStateFixture(page, () => report());
   await page.goto('/');
+  await page.locator('#session-sort').selectOption('status');
   const working = page.locator('details.session-group.group-working');
   await working.locator(':scope > summary').click();
   await expect(working).not.toHaveAttribute('open', '');
@@ -261,6 +264,7 @@ test('keeps expanded Git details open when polled state updates', async ({ page 
     return report(polls > 1 ? 'Deploy dashboard' : 'Build dashboard');
   });
   await page.goto('/');
+  await page.locator('#session-sort').selectOption('status');
   await expect(page.locator('.tree-title').filter({ hasText: 'Build dashboard' })).toBeVisible();
 
   const tree = page.locator('.group-working details[data-agent-key="instance-alpha:root-alpha"]');
@@ -311,25 +315,27 @@ test('session sorting supports name, context, cumulative usage, direction, and s
   state.instances[0].sessions.push({ id: 'alpha-task', title: 'Alpha task', status: 'busy', directory: '/work/alpha/app', activity: 'Working', lastActivityAt: '2026-01-02T00:00:00Z', usage: { contextEstimate: 50, input: 50, output: 50 } });
   await installStateFixture(page, () => state);
   await page.goto('/');
-  await page.getByText('Filter agents').click();
-  await page.locator('#active').check();
 
-  const working = page.locator('.group-working');
-  const names = () => working.locator(':scope > details.agent-tree > summary .tree-title').allTextContents();
+  const names = () => page.locator('.group-sorted-sessions > details.agent-tree > summary .tree-title').allTextContents();
   await page.locator('#session-sort').selectOption('name');
   await page.locator('#sort-direction').click();
-  await expect.poll(names).toEqual(['Alpha task', 'Build dashboard']);
+  await expect.poll(names).toEqual(['Alpha task', 'Approve deployment', 'Build dashboard', 'Fix API']);
   await page.locator('#sort-direction').click();
-  await expect.poll(names).toEqual(['Build dashboard', 'Alpha task']);
+  await expect.poll(names).toEqual(['Fix API', 'Build dashboard', 'Approve deployment', 'Alpha task']);
 
   await page.locator('#session-sort').selectOption('context');
-  await expect.poll(names).toEqual(['Build dashboard', 'Alpha task']);
+  await expect.poll(names).toEqual(['Build dashboard', 'Alpha task', 'Approve deployment', 'Fix API']);
   await page.locator('#session-sort').selectOption('tokens');
-  await expect.poll(names).toEqual(['Alpha task', 'Build dashboard']);
+  await expect.poll(names).toEqual(['Alpha task', 'Build dashboard', 'Approve deployment', 'Fix API']);
+
+  await page.locator('#session-sort').selectOption('status');
+  await expect(page.locator('.group-needs-attention')).toBeVisible();
+  await expect(page.locator('.group-working')).toBeVisible();
+  await page.locator('#session-sort').selectOption('tokens');
 
   await page.reload();
   await expect(page.locator('#session-sort')).toHaveValue('tokens');
-  await expect.poll(names).toEqual(['Alpha task', 'Build dashboard']);
+  await expect.poll(names).toEqual(['Alpha task', 'Build dashboard', 'Approve deployment', 'Fix API']);
 });
 
 test('offline agents show one consistent summary status with or without children', async ({ page }) => {
