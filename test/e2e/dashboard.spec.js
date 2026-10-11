@@ -112,6 +112,7 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(root.locator(':scope > summary')).toContainText('2 children');
   await expect(root.locator(':scope > summary .badge')).toHaveText('busy');
   await root.locator(':scope > summary').click();
+  await expect(root.locator('.session-info > p.muted').first()).toHaveText('alpha · /work/alpha/app · 2101');
   await expect(page.getByText('Finished review', { exact: true })).toBeVisible();
   await expect(page.getByText('Unknown-age review', { exact: true })).toBeVisible();
 
