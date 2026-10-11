@@ -60,8 +60,7 @@ function render() {
   const selected = $('host').value;
   const machines = new Map(instances.map(i => [machineKey(i), i]));
   const options = [...machines].sort((a, b) => a[1].host.localeCompare(b[1].host)).map(([key, i]) =>
-    new Option(instances.filter(other => other.host === i.host).length > 1 ? `${i.host} (${key.slice(0, 8)})` : i.host,
-      instances.filter(other => other.host === i.host).length > 1 ? key : i.host));
+    new Option(instances.filter(other => other.host === i.host).length > 1 ? `${i.host} (${key.slice(0, 8)})` : i.host, key));
   if (!$('host').options || $('host').options.length !== options.length + 1 || options.some((option, index) => $('host').options[index + 1]?.value !== option.value)) {
     $('host').replaceChildren(new Option('All computers', ''), ...options);
   }
