@@ -206,7 +206,7 @@ function render() {
       container.append(summary);
       const card = el('article', undefined, 'session-card');
       if (!i.machineId) {
-        card.append(el('p', 'This instance is using a legacy host-based identity because its report has no machine ID. Update or reinstall the OpenCode Supervisor plugin to use a stable machine identity.', 'instance-warning'));
+        card.append(el('p', 'This instance is using a legacy host-based identity because its report has no machine ID. Update or reinstall the AgentDashboard plugin to use a stable machine identity.', 'instance-warning'));
       }
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div', undefined, 'session-info');
       info.append(el('p', `Computer ${i.host} · OpenCode instance PID ${i.pid ?? 'unknown'} · ${s.directory || i.directory || 'unknown path'}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
