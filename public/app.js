@@ -145,7 +145,22 @@ function render() {
     ['OpenCode instances', online.length, 'Online instance reports; one computer may run several'],
     ['Active agents', sessions.filter(({ session, classification }) => !session.parentID && isActiveCategory(classification)).length, 'Top-level sessions needing attention or doing work'],
     ['Active subagents', sessions.filter(({ session, classification }) => session.parentID && isActiveCategory(classification)).length, 'Child sessions needing attention or doing work'],
-  ].map(([label, value, detail]) => { const n = el('article', undefined, 'metric'); n.append(el('span', label), el('small', detail), el('strong', value)); return n; }));
+  ].map(([label, value, detail], index) => {
+    const n = el('article', undefined, 'metric');
+    const labelRow = el('div', undefined, 'metric-label');
+    labelRow.append(el('span', label));
+    const tooltipId = `metric-tooltip-${index}`;
+    const help = el('button', '?', 'metric-help');
+    help.type = 'button';
+    help.setAttribute?.('aria-label', 'Metric description');
+    help.setAttribute?.('aria-describedby', tooltipId);
+    const tooltip = el('span', detail, 'metric-tooltip');
+    tooltip.id = tooltipId;
+    tooltip.setAttribute?.('role', 'tooltip');
+    labelRow.append(help, tooltip);
+    n.append(labelRow, el('strong', value));
+    return n;
+  }));
   reconcile($('metrics'), metrics);
   const selected = $('host').value;
   const machines = new Map(instances.map(i => [machineKey(i), i]));
