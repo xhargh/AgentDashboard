@@ -419,10 +419,18 @@ function render() {
         card.append(el('p', 'This instance is using a legacy host-based identity because its report has no machine ID. Update or reinstall the AgentDashboard plugin to use a stable machine identity.', 'instance-warning'));
       }
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div', undefined, 'session-info');
-      info.append(el('p', `Computer ${i.host} · OpenCode instance PID ${i.pid ?? 'unknown'}`, 'muted'));
+       info.append(el('p', `Computer ${i.host} · OpenCode instance PID ${i.pid ?? 'unknown'}`, 'muted'));
        if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
        if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
-        renderMetrics(info, s, i.online, i.sessions);
+       if (s.status === 'retry') {
+         const elapsed = Number.isFinite(Date.parse(s.stateChangedAt)) ? formatDuration(Math.max(0, Date.now() - Date.parse(s.stateChangedAt))) : undefined;
+         const deadline = s.retry?.nextRetryAt, wait = Number.isFinite(Date.parse(deadline)) ? Date.parse(deadline) - Date.now() : undefined;
+         const retryText = `Retrying · attempt ${s.retry?.attempt ?? 'unavailable'}${elapsed ? ` · ${elapsed} in retry state` : ''}` +
+           (deadline ? wait > 0 ? ` · next retry in ${formatDuration(wait)}` : ` · next retry deadline ${formatTimestamp(deadline)}` : ' · next retry time unavailable');
+         info.append(el('p', retryText, 'retry-context'));
+       }
+       if (s.status === 'error') info.append(el('p', `Last safe error category · ${s.errorCategory || 'unavailable'}`, 'error-context'));
+         renderMetrics(info, s, i.online, i.sessions);
       if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
       const events = activityEvents(i, s.id), activityKey = `${i.instanceId}:${s.id}`;
       const activity = el('details', undefined, 'activity-timeline');

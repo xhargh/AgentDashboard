@@ -13,7 +13,7 @@ const phases = {
   error: 'error', retry: 'retry', permissionAnswered: 'permission', deleted: 'lifecycle', toolActivity: 'tool',
 };
 const outcomes = { error: 'failure', deleted: 'completed' };
-const safeAttributeKeys = new Set(['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'nextRetryAt']);
+const safeAttributeKeys = new Set(['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'nextRetryAt', 'errorCategory']);
 
 function safeAttributes(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
