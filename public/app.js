@@ -98,9 +98,10 @@ function renderExecutionTimeline(instance, parent, eligible) {
   details.addEventListener('toggle', () => details.open ? expandedExecution.add(key) : expandedExecution.delete(key));
   const intervalList = instance.timeline?.intervals;
   const intervals = Array.isArray(intervalList) ? intervalList : [];
-  const descendants = descendantSessions(parent, instance.sessions).filter(session => eligible.has(session.id));
+  const descendants = descendantSessions(parent, instance.sessions);
   const rows = [parent, ...descendants].map(session => ({ session, intervals: intervals.filter(item => item.sessionId === session.id) }));
-  const relevant = rows.flatMap(row => row.intervals);
+  const relevant = rows.flatMap(row => row.intervals.filter((item, index, list) =>
+    !(item.status === 'idle' && index === list.length - 1 && item.endAt === null)));
   details.append(el('summary', 'Execution timeline', 'execution-heading'));
   if (!relevant.length) {
     const message = !instance.timeline
@@ -123,12 +124,14 @@ function renderExecutionTimeline(instance, parent, eligible) {
     const sessionLabel = `${row.session.title || 'Session'}${instance.online ? '' : ' · offline'}`;
     line.append(el('span', sessionLabel, 'timeline-session'));
     const track = el('div', undefined, 'timeline-track');
-    if (!row.intervals.length) {
+    const visibleIntervals = row.intervals.filter((item, index, list) =>
+      !(item.status === 'idle' && index === list.length - 1 && item.endAt === null));
+    if (!visibleIntervals.length) {
       const unknown = el('span', 'Unknown · partial history', 'timeline-interval timeline-unknown');
       unknown.style.left = '0'; unknown.style.width = '100%';
       track.append(unknown);
     }
-    for (const item of row.intervals) {
+    for (const item of visibleIntervals) {
       const start = Date.parse(item.startAt), end = item.endAt ? Date.parse(item.endAt) : Date.now();
       const block = el('span', item.status, `timeline-interval timeline-${item.status}`);
       block.style.left = `${Math.max(0, (start - min) / span * 100)}%`;
@@ -153,8 +156,14 @@ function renderExecutionTimeline(instance, parent, eligible) {
     list.append(el('li', text));
   }
   details.append(chart);
-  const legend = el('p', 'Working · Idle · Permission wait · Retry · Error · Offline · Unknown/partial', 'timeline-legend');
-  details.append(legend, list);
+  const legend = el('div', undefined, 'timeline-legend');
+  for (const [label, state] of [['Working', 'busy'], ['Idle', 'idle'], ['Permission wait', 'waiting'], ['Retry', 'retry'], ['Error', 'error'], ['Offline', 'offline'], ['Unknown/partial', 'unknown']]) {
+    const item = el('span', undefined, 'timeline-legend-item');
+    item.append(el('span', undefined, `timeline-swatch timeline-${state}`), el('span', label)); legend.append(item);
+  }
+  const disclosure = el('details', undefined, 'timeline-details');
+  disclosure.append(el('summary', 'Show interval details'), list);
+  details.append(legend, disclosure);
   details.append(el('p', instance.timeline?.partial ? 'Partial history: earlier transitions may be missing or truncated.' : 'Intervals show observed event times; they do not represent compute time.', 'timeline-message'));
   return details;
 }
@@ -338,8 +347,7 @@ function render() {
         for (const [key, label] of [['status', 'Status'], ['log', 'Recent commits'], ['worktrees', 'Worktrees']]) { const block = el('section'); block.append(el('h4', label), el('pre', typeof i.git[key] === 'string' ? i.git[key] || 'Clean / empty' : 'Waiting for Git snapshot')); grid.append(block); }
         details.append(grid); card.append(details);
       }
-      container.append(card);
-      if (!compact) container.append(renderExecutionTimeline(i, s, eligible));
+      if (!compact) card.append(renderExecutionTimeline(i, s, eligible));
       if (!compact && children.length) {
         const descendants = descendantSessions(s, i.sessions);
         const visible = descendants.filter(child => eligible.has(child.id));
@@ -361,8 +369,9 @@ function render() {
           while (parentId && parentId !== s.id) { level++; parentId = i.sessions.find(candidate => candidate.id === parentId)?.parentID; }
           appendNode(section, byId.get(child.id), true, level);
         }
-        container.append(section);
+        card.append(section);
       }
+      container.append(card);
       parent.append(container);
     }
     for (const root of buildSessionTree(i.sessions)) {
