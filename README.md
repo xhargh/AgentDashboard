@@ -98,7 +98,7 @@ The optional Tauri prototype opens the dashboard in a native AgentDashboard wind
 
 The approved Live A identity is shared by the web header and favicon, Tauri application and tray icons, and GNOME/freedesktop assets. The canonical SVG and generated icon kit are tracked under `packaging/icons/`; install `packaging/agentdashboard.desktop` and the matching `packaging/icons/hicolor/` theme files to add the application to a GNOME launcher. GNOME Shell integrations can use the theme-recolored `agentdashboard-symbolic` asset for panel status icons.
 
-Build a Linux x86_64 executable with Docker BuildKit (no host Rust, Tauri CLI, Node.js, or webview development packages required). The build uses the tracked Tauri icon exports:
+Build a Linux x86_64 executable with Docker BuildKit (no host Rust, Tauri CLI, Node.js, or webview development packages required). BuildKit cache mounts retain Cargo registry downloads, Git checkouts, Tauri CLI installation artifacts, and compiled Rust artifacts across builds; Cargo fingerprints still rebuild affected outputs when source or dependency inputs change. The first build populates the caches, and later builds reuse them. The build uses the tracked Tauri icon exports:
 
 ```bash
 DOCKER_BUILDKIT=1 docker build -f Dockerfile.tauri --output type=local,dest=dist .
