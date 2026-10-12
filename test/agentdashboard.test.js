@@ -374,6 +374,21 @@ test('rejects unauthenticated, malformed, oversized and cross-origin requests', 
   const page = await dispatch(url); assert.equal(page.status, 200); assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.equal((await dispatch(url + '/src/plugin.js')).status, 404);
 });
+test('serves every web icon referenced by the dashboard with its correct media type', async t => {
+  const { dispatch } = await start(t);
+  const html = await (await dispatch('/')).text();
+  const iconPaths = [...html.matchAll(/(?:href|src)="(\/icons\/[^\"]+)"/g)].map(([, path]) => path);
+  assert.ok(iconPaths.length > 0);
+  for (const path of iconPaths) {
+    const response = await dispatch(path);
+    assert.equal(response.status, 200, `${path} is served`);
+    assert.notEqual(response.headers.get('content-type'), 'text/html', `${path} is not an HTML fallback`);
+    assert.ok((await response.arrayBuffer()).byteLength > 0, `${path} is non-empty`);
+  }
+  assert.equal((await dispatch('/icons/icon.svg')).headers.get('content-type'), 'image/svg+xml');
+  assert.equal((await dispatch('/icons/favicon.ico')).headers.get('content-type'), 'image/vnd.microsoft.icon');
+  assert.equal((await dispatch('/icons/site.webmanifest')).headers.get('content-type'), 'application/manifest+json');
+});
 for (const local of [false, true]) test(`plugin reports Git and session events in ${local ? 'local' : 'network'} mode`, async t => {
   const dir = await mkdtemp(join(tmpdir(), 'supervisor-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const git = (...args) => promisify(execFile)('git', ['-C', dir, ...args]);

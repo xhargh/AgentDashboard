@@ -13,9 +13,13 @@ async function startup(t, { file, exported } = {}) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   await writeFile(join(dir, 'package.json'), JSON.stringify({ type: 'module', scripts: { start: pkg.scripts.start } }));
-  await mkdir(join(dir, 'src')); await mkdir(join(dir, 'public'));
+  await mkdir(join(dir, 'src')); await mkdir(join(dir, 'public')); await mkdir(join(dir, 'public/icons'));
   await copyFile(new URL('../src/server.js', import.meta.url), join(dir, 'src/server.js'));
   for (const name of ['index.html', 'app.js', 'session-state.js', 'style.css']) await writeFile(join(dir, 'public', name), '');
+  for (const name of ['icon.svg', 'favicon.ico', 'favicon-16x16.png', 'favicon-32x32.png', 'apple-touch-icon.png',
+    'site.webmanifest', 'android-chrome-192x192.png', 'android-chrome-512x512.png']) {
+    await writeFile(join(dir, 'public/icons', name), '');
+  }
   await writeFile(join(dir, 'probe.mjs'), `import { Server } from 'node:http';
 import { writeFileSync } from 'node:fs';
 Server.prototype.listen = function (port, host) { writeFileSync('started', 'STARTUP_OK ' + host); return this; };`);
@@ -48,9 +52,13 @@ test('legacy companion environment names do not enable network mode', async t =>
   t.after(() => rm(dir, { recursive: true, force: true }));
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   await writeFile(join(dir, 'package.json'), JSON.stringify({ type: 'module', scripts: { start: pkg.scripts.start } }));
-  await mkdir(join(dir, 'src')); await mkdir(join(dir, 'public'));
+  await mkdir(join(dir, 'src')); await mkdir(join(dir, 'public')); await mkdir(join(dir, 'public/icons'));
   await copyFile(new URL('../src/server.js', import.meta.url), join(dir, 'src/server.js'));
   for (const name of ['index.html', 'app.js', 'session-state.js', 'style.css']) await writeFile(join(dir, 'public', name), '');
+  for (const name of ['icon.svg', 'favicon.ico', 'favicon-16x16.png', 'favicon-32x32.png', 'apple-touch-icon.png',
+    'site.webmanifest', 'android-chrome-192x192.png', 'android-chrome-512x512.png']) {
+    await writeFile(join(dir, 'public/icons', name), '');
+  }
   await writeFile(join(dir, 'probe.mjs'), `import { Server } from 'node:http'; import { writeFileSync } from 'node:fs'; Server.prototype.listen = function (port, host) { writeFileSync('started', 'STARTUP_OK ' + host); return this; };`);
   await writeFile(join(dir, '.env'), 'SUPERVISOR_TOKEN=abcdefghijklmnopqrstuvwxyz0123456789\nHOST=0.0.0.0\n');
   const env = { ...process.env, NODE_OPTIONS: `--import=${join(dir, 'probe.mjs')}` }; delete env.AGENTDASHBOARD_TOKEN;
