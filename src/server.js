@@ -35,7 +35,7 @@ function validUsage(usage) {
 function validTimestamp(value) { return value === null || boundedString(value, 40) && Number.isFinite(Date.parse(value)); }
 function validObservabilityEvent(event, reportInstanceId) {
   if (!event || !boundedString(event.sessionId, 200) || !boundedString(event.timestamp, 40) || !Number.isFinite(Date.parse(event.timestamp)) ||
-      !['created','busy','idle','waiting','error','retry','permissionAnswered','deleted','toolActivity','fileChange','modelSnapshot'].includes(event.kind) || !boundedString(event.summary, LIMITS.summary)) return false;
+      !['created','busy','idle','waiting','error','retry','permissionAnswered','deleted','toolActivity','fileChange','modelSnapshot','compaction'].includes(event.kind) || !boundedString(event.summary, LIMITS.summary)) return false;
   if (event.schemaVersion === undefined) return true;
   const attributes = event.attributes;
   return event.schemaVersion === 1 && boundedString(event.id, 200) && boundedString(event.instanceId, 100) &&
@@ -83,7 +83,9 @@ function validReport(v) {
        (s.retry === undefined || s.retry && typeof s.retry === 'object' && !Array.isArray(s.retry) &&
          (s.retry.attempt === undefined || Number.isSafeInteger(s.retry.attempt) && s.retry.attempt >= 0) &&
          (s.retry.nextRetryAt === undefined || validTimestamp(s.retry.nextRetryAt))) &&
-       (s.errorCategory === undefined || ['timeout', 'permission', 'cancelled', 'rate-limit', 'provider', 'tool', 'unknown'].includes(s.errorCategory)) &&
+        (s.errorCategory === undefined || ['timeout', 'permission', 'cancelled', 'rate-limit', 'provider', 'tool', 'unknown'].includes(s.errorCategory)) &&
+       ['lastCompactedAt', 'contextEstimateAt'].every(key => s[key] === undefined || validTimestamp(s[key])) &&
+       (s.compactionCount === undefined || Number.isSafeInteger(s.compactionCount) && s.compactionCount >= 0) &&
        (s.permissions === undefined || Array.isArray(s.permissions) && s.permissions.length <= 50 && s.permissions.every(permission => permission &&
          (permission.id === undefined || boundedString(permission.id, 200)) &&
          (permission.type === undefined || ['read', 'write', 'edit', 'bash', 'webfetch', 'external_directory', 'doom_loop', 'task', 'unknown'].includes(permission.type)) &&
