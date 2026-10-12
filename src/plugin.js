@@ -143,7 +143,7 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
     const result = { ...event };
     if (result.attributes) {
       const attributes = { ...result.attributes };
-      if (!privacy.toolActivity) { delete attributes.toolName; delete result.toolCallId; delete result.messageId; }
+      if (!privacy.toolActivity) { delete attributes.toolName; delete attributes.delegationId; delete result.toolCallId; delete result.messageId; }
       if (!privacy.modelMetrics) { delete attributes.providerId; delete attributes.modelId; delete attributes.variant; }
       if (!privacy.permissionDetails) { delete attributes.permissionType; delete attributes.permissionTitle; delete attributes.permissionId; }
       if (!privacy.paths) delete attributes.path;
@@ -405,11 +405,20 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           }
         }
         info(p.info);
-        if (event.type === 'session.created' && !existed) recordObserved(session(p.info.id), 'created');
+        if (event.type === 'session.created' && !existed) {
+          const sourceTime = suppliedTimestamp(p.info?.time?.created ?? p.info?.createdAt);
+          const delegationId = p.info?.delegationID || p.info?.parentCallID;
+          recordObserved(session(p.info.id), 'created', {
+            timestampSource: sourceTime?.timestampSource || 'observed',
+            ...(typeof delegationId === 'string' && delegationId.length <= 200 ? { attributes: { delegationId } } : {}),
+          }, sourceTime?.timestamp);
+        }
       }
       if (event.type === 'session.deleted') {
         const deleted = sessions.get(p.info?.id) || { id: p.info?.id };
-        recordObserved(deleted, 'deleted'); sessions.delete(p.info?.id);
+        const sourceTime = suppliedTimestamp(p.info?.time?.deleted ?? p.info?.deletedAt);
+        recordObserved(deleted, 'deleted', { timestampSource: sourceTime?.timestampSource || 'observed' }, sourceTime?.timestamp);
+        sessions.delete(p.info?.id);
       }
       if (p.sessionID) {
         const s = session(p.sessionID);
