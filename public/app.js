@@ -15,7 +15,7 @@ let sortDirection = savedSortDirection === 'asc' ? 'asc' : 'desc';
 const sortNodes = nodes => [...nodes].sort((a, b) => compareSessions(a.session, b.session, sortField, sortDirection));
 const machineKey = i => i.machineId || `legacy:${i.host}`;
 const expandedAgents = new Set();
-const collapsedAgents = new Set();
+const expandedSessionGroups = new Set();
 const expandedSubagentGroups = new Set();
 const expandedActivity = new Set();
 const expandedExecution = new Set();
@@ -530,10 +530,10 @@ function render() {
       const container = el('details', undefined, `agent-tree${compact ? ' subagent-row' : ''}`);
       container.dataset.agentKey = key;
       if (compact) container.style.setProperty('--tree-depth', depth);
-      container.open = expandedAgents.has(key) || (!compact && !children.length && !collapsedAgents.has(key));
+      container.open = expandedAgents.has(key);
       container.addEventListener('toggle', () => {
-        if (container.open) { expandedAgents.add(key); collapsedAgents.delete(key); }
-        else { expandedAgents.delete(key); collapsedAgents.add(key); }
+        if (container.open) expandedAgents.add(key);
+        else expandedAgents.delete(key);
       });
       const summary = el('summary', undefined, 'agent-tree-summary');
       summary.append(el('span', s.title || 'Session', 'tree-title'));
@@ -778,7 +778,8 @@ function render() {
     items.sort((a, b) => a.root && b.root ? compareSessions(a.root.session, b.root.session, sortField, sortDirection) : a.root ? -1 : b.root ? 1 : 0);
     const section = el('details', undefined, `session-group group-${id}`);
     section.dataset.agentKey = `group:${id}`;
-    section.open = true;
+    section.open = expandedSessionGroups.has(id);
+    section.addEventListener('toggle', () => section.open ? expandedSessionGroups.add(id) : expandedSessionGroups.delete(id));
     const title = el('summary', undefined, 'group-heading');
     const h = el('h2', `${heading} · ${items.length}`); h.id = `group-${id}-heading`;
     title.append(h, el('p', description, 'muted')); section.append(title);

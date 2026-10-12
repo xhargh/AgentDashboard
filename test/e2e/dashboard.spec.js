@@ -85,7 +85,24 @@ function report(title = 'Build dashboard', status = 'busy', now = Date.now()) {
   };
 }
 
-async function installStateFixture(page, handler) {
+async function installStateFixture(page, handler, { legacyExpandedDefaults = true } = {}) {
+  if (legacyExpandedDefaults) await page.addInitScript(() => {
+    const expanded = new WeakSet();
+    const restoreDefaults = () => {
+      for (const group of document.querySelectorAll('details.session-group')) if (!expanded.has(group)) {
+        expanded.add(group); group.open = true;
+      }
+      for (const agent of document.querySelectorAll('details.agent-tree:not(.subagent-row)')) {
+        if (expanded.has(agent) || agent.querySelector(':scope > article.session-card > .subagent-group')) continue;
+        expanded.add(agent); agent.open = true;
+      }
+    };
+    document.addEventListener('DOMContentLoaded', () => {
+      const observer = new MutationObserver(restoreDefaults);
+      observer.observe(document, { childList: true, subtree: true });
+      restoreDefaults();
+    }, { once: true });
+  });
   await page.route('**/api/state', async route => {
     const authorization = route.request().headers().authorization;
     const response = handler(authorization);
@@ -175,6 +192,24 @@ test('all agent status groups can be folded and unfolded', async ({ page }) => {
   await waiting.locator(':scope > summary').click();
   await expect(waiting).not.toHaveAttribute('open', '');
   await expect(waiting.locator('[data-agent-key="instance-beta:root-beta"]')).toBeHidden();
+});
+
+test('starts every collapsible dashboard panel folded and preserves deliberate expansion', async ({ page }) => {
+  await installStateFixture(page, () => report(), { legacyExpandedDefaults: false });
+  await page.goto('/');
+  await expect(page.locator('details[open]')).toHaveCount(0);
+  const group = page.locator('details.session-group').first();
+  await group.locator(':scope > summary').click();
+  await expect(group).toHaveAttribute('open', '');
+  const root = group.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  await expect(root).not.toHaveAttribute('open', '');
+  await root.locator(':scope > summary').click();
+  await expect(root).toHaveAttribute('open', '');
+  const timeline = root.locator('.execution-timeline');
+  await expect(timeline).not.toHaveAttribute('open', '');
+  await page.waitForTimeout(2200);
+  await expect(group).toHaveAttribute('open', '');
+  await expect(root).toHaveAttribute('open', '');
 });
 
 test('leaf subagents can be folded and unfolded like parent sessions', async ({ page }) => {
