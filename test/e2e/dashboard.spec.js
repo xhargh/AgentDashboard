@@ -528,6 +528,31 @@ test('shows multiple safe permission requests and correlated outcomes on descend
   await expect(child).not.toContainText('opaque-permission-1');
 });
 
+test('shows latest attributed file-change snapshot and unassigned workspace changes separately', async ({ page }) => {
+  await installStateFixture(page, () => {
+    const state = report('File changes', 'busy');
+    const instance = state.instances[0];
+    instance.unassignedFileCount = 2;
+    instance.events = [
+      { id: 'snapshot-1', sessionId: 'root-alpha', kind: 'fileChange', timestamp: '2026-10-12T10:00:00Z', attributes: { fileKey: '__snapshot__', changeType: 'snapshot', snapshotId: 'snapshot-a' } },
+      { id: 'file-a', sessionId: 'root-alpha', kind: 'fileChange', timestamp: '2026-10-12T10:00:01Z', attributes: { fileKey: 'hash-a', path: '/work/alpha/app/a.ts', changeType: 'snapshot', snapshotId: 'snapshot-a', additions: 4, deletions: 2 } },
+      { id: 'file-b', sessionId: 'root-alpha', kind: 'fileChange', timestamp: '2026-10-12T10:00:02Z', attributes: { fileKey: 'hash-b', path: '/work/alpha/app/b.ts', changeType: 'snapshot', snapshotId: 'snapshot-a', additions: 1, deletions: 0 } },
+      { id: 'snapshot-2', sessionId: 'root-alpha', kind: 'fileChange', timestamp: '2026-10-12T10:01:00Z', attributes: { fileKey: '__snapshot__', changeType: 'snapshot', snapshotId: 'snapshot-b' } },
+      { id: 'file-c', sessionId: 'root-alpha', kind: 'fileChange', timestamp: '2026-10-12T10:01:01Z', attributes: { fileKey: 'hash-c', path: '/work/alpha/app/c.ts', changeType: 'snapshot', snapshotId: 'snapshot-b', additions: 2, deletions: 1 } },
+    ];
+    return state;
+  });
+  await page.goto('/');
+  const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  await root.locator(':scope > summary').click();
+  await expect(root.locator('.unassigned-changes')).toHaveText('Workspace changes not attributed to a session · 2 files');
+  const details = root.locator('article.session-card > details.file-changes');
+  await expect(details.locator('> summary')).toHaveText('File changes · 1 · +2 / −1');
+  await details.locator('> summary').click();
+  await expect(details.locator('.file-change-list')).toHaveText('/work/alpha/app/c.ts · +2 / −1');
+  await expect(details).not.toContainText('a.ts');
+});
+
 test('warns per instance when reports use legacy host-based identity', async ({ page }) => {
   const now = Date.now();
   await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [

@@ -24,6 +24,8 @@ Current mappings are `created → lifecycle`, `busy → working`, `idle → idle
 
 The dashboard joins tool snapshots by session, message ID and call/part ID. It reports durations only when both endpoint timestamps are source-provided. A running call with a known SDK start may show elapsed time so far (one minute or longer is labeled long-running); an observed-only start never gets a fabricated duration. When a session ends or its instance disconnects without a terminal tool event, the call is shown incomplete and elapsed time stops at the last known observation.
 
+File-change observations carry a one-way file key for de-duplication and only source-supplied addition/deletion counts. File paths are included only when `paths` telemetry is enabled; patch text and file contents are never included. Session diff snapshots replace the prior per-file snapshot in the dashboard projection, while later incremental edits are applied after that snapshot. Events without an owning session contribute only to the separately labeled unassigned workspace file count.
+
 Reports without `schemaVersion` continue to be accepted as legacy events. New consumers must tolerate absent optional IDs, attributes, and fields from older reports. Events are count/age bounded; pruning sets truncation metadata and timeline projections remain marked partial rather than asserting completeness.
 
 ## Privacy and transport
