@@ -15,6 +15,7 @@ const sortNodes = nodes => [...nodes].sort((a, b) => compareSessions(a.session, 
 const machineKey = i => i.machineId || `legacy:${i.host}`;
 const expandedAgents = new Set();
 const collapsedAgents = new Set();
+const expandedSubagentGroups = new Set();
 const expandedActivity = new Set();
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 function formatTimestamp(value) {
@@ -199,13 +200,14 @@ function render() {
     }
     function hasEligible(node) { return eligible.has(node.session.id) || node.children.some(hasEligible); }
     if (!i.online && i.sessions.length === 0) groups.find(([id]) => id === 'offline')[3].push({ i, instanceOnly: true });
-    function appendNode(parent, node) {
+    function appendNode(parent, node, compact = false, depth = 0) {
       if (!hasEligible(node)) return;
       const { session: s, children } = node, classification = classificationsFor(i).get(s.id);
       const display = sessionState(s, i.online, classification), key = `${i.instanceId}:${s.id}`;
-      const container = el('details', undefined, 'agent-tree');
+      const container = el('details', undefined, `agent-tree${compact ? ' subagent-row' : ''}`);
       container.dataset.agentKey = key;
-      container.open = children.length ? expandedAgents.has(key) : !collapsedAgents.has(key);
+      if (compact) container.style.setProperty('--tree-depth', depth);
+      container.open = expandedAgents.has(key) || (!compact && !children.length && !collapsedAgents.has(key));
       container.addEventListener('toggle', () => {
         if (container.open) { expandedAgents.add(key); collapsedAgents.delete(key); }
         else { expandedAgents.delete(key); collapsedAgents.add(key); }
@@ -215,7 +217,10 @@ function render() {
       const summaryBadge = el('span', display.label, `badge ${display.className}`);
       summaryBadge.title = display.detail;
       summary.append(summaryBadge);
-      if (children.length) summary.append(el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
+      if (!compact && children.length) {
+        const count = descendantSessions(s, i.sessions).filter(child => eligible.has(child.id)).length;
+        summary.append(el('span', `${count} ${count === 1 ? 'child' : 'children'}`, 'tree-count'));
+      }
       if (classification.attentionRequired) summary.append(el('span', 'Attention in this branch', 'attention-summary'));
       const activityText = s.activity?.trim();
       if (activityText && !/^(ready|idle|waiting for input|waiting for permission)$/i.test(activityText) && activityText !== display.label) {
@@ -265,7 +270,29 @@ function render() {
         details.append(grid); card.append(details);
       }
       container.append(card);
-      if (children.length) { const nested = el('div', undefined, 'agent-tree-children'); for (const child of sortNodes(children)) appendNode(nested, child); container.append(nested); }
+      if (!compact && children.length) {
+        const descendants = descendantSessions(s, i.sessions);
+        const visible = descendants.filter(child => eligible.has(child.id));
+        const section = el('details', undefined, 'subagent-group');
+        const groupKey = `subagents:${key}`;
+        section.dataset.agentKey = groupKey;
+        section.open = expandedSubagentGroups.has(groupKey);
+        section.addEventListener('toggle', () => section.open ? expandedSubagentGroups.add(groupKey) : expandedSubagentGroups.delete(groupKey));
+        const header = el('summary', `Subagents · ${visible.length}${descendants.length > visible.length ? ` · ${descendants.length - visible.length} hidden` : ''}`, 'subagent-heading');
+        const attention = descendants.filter(child => ['waiting', 'error'].includes(child.status) && eligible.has(child.id)).length;
+        if (attention) header.append(el('span', `${attention} need attention`, 'attention-summary'));
+        section.append(header);
+        const byId = new Map(buildSessionTree(i.sessions).flatMap(function flatten(n) { return [n, ...n.children.flatMap(flatten)]; }).map(n => [n.session.id, n]));
+        for (const child of visible.sort((a, b) => {
+          const na = byId.get(a.id), nb = byId.get(b.id);
+          return compareSessions(na.session, nb.session, sortField, sortDirection);
+        })) {
+          let level = 0, parentId = child.parentID;
+          while (parentId && parentId !== s.id) { level++; parentId = i.sessions.find(candidate => candidate.id === parentId)?.parentID; }
+          appendNode(section, byId.get(child.id), true, level);
+        }
+        container.append(section);
+      }
       parent.append(container);
     }
     for (const root of buildSessionTree(i.sessions)) {

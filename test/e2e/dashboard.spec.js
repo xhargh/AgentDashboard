@@ -122,6 +122,7 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(root.locator(':scope > summary .tree-title')).toHaveText('Build dashboard');
   await expect(root.locator(':scope > summary .badge')).toHaveText('busy');
   await root.locator(':scope > summary').click();
+  await root.locator(':scope > .subagent-group > summary').click();
   await expect(root.locator('.session-info > p.muted').first()).toHaveText('Computer alpha · OpenCode instance PID 2101');
   await expect(root.locator(':scope > summary .tree-directory')).toHaveAttribute('aria-label', 'Working directory: /work/alpha/app');
   await expect(page.getByText('Finished review', { exact: true })).toBeVisible();
@@ -180,7 +181,9 @@ test('leaf subagents can be folded and unfolded like parent sessions', async ({ 
   await page.goto('/');
   const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
   await root.locator(':scope > summary').click();
+  await root.locator(':scope > .subagent-group > summary').click();
   const child = page.locator('details[data-agent-key="instance-alpha:child-alpha"]');
+  await child.locator(':scope > summary').click();
   await expect(child).toHaveAttribute('open', '');
   await expect(child.locator(':scope > article.session-card')).toBeVisible();
 
@@ -553,6 +556,7 @@ test('renders nested agents, preserves expansion, surfaces descendant attention,
   await expect(root.locator(':scope > summary')).toContainText('Attention in this branch');
   await root.locator(':scope > summary').focus();
   await page.keyboard.press('Enter');
+  await root.locator(':scope > .subagent-group > summary').click();
   const child = page.locator('details[data-agent-key="instance-alpha:child-alpha"]');
   await child.locator(':scope > summary').focus();
   await page.keyboard.press('Enter');
@@ -560,12 +564,48 @@ test('renders nested agents, preserves expansion, surfaces descendant attention,
   await expect(page.getByText('Orphan agent', { exact: true })).toBeVisible();
   const cycle = page.locator('details[data-agent-key="instance-alpha:cycle-a"]');
   await expect(cycle.locator(':scope > summary')).toContainText('Cycle A');
-  await cycle.locator(':scope > summary').focus();
-  await page.keyboard.press('Enter');
-  await expect(page.getByText('Cycle B', { exact: true })).toBeVisible();
+  await expect(page.getByText('Cycle B', { exact: true })).toHaveCount(1);
   await expect(page.locator('.tree-title').filter({ hasText: 'Build dashboard updated' })).toBeVisible();
   await expect(root).toHaveAttribute('open', '');
   await expect(child).toHaveAttribute('open', '');
+});
+
+test('groups eligible descendants once, preserves child expansion through polls and filtering, and exposes attention while collapsed', async ({ page }) => {
+  let polls = 0;
+  await installStateFixture(page, () => {
+    polls++;
+    const state = report();
+    state.instances[0].sessions.push(
+      { id: 'grandchild', parentID: 'child-alpha', title: 'Nested worker', status: 'waiting', activity: 'Needs approval' },
+      { id: 'working-child', parentID: 'root-alpha', title: 'Working child', status: 'busy' },
+      { id: 'old-child', parentID: 'root-alpha', title: 'Old finished child', status: 'idle', stateChangedAt: '2020-01-01T00:00:00.000Z' },
+    );
+    return state;
+  });
+  await page.goto('/');
+  const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
+  await root.locator(':scope > summary').click();
+  const group = root.locator(':scope > .subagent-group');
+  await expect(group.locator(':scope > summary')).toContainText('Subagents · 4');
+  await expect(group.locator(':scope > summary')).toContainText('need attention');
+  await expect(group.locator('details.subagent-row')).toHaveCount(4);
+  await expect(group.getByText('Old finished child', { exact: true })).toHaveCount(0);
+
+  await group.locator(':scope > summary').click();
+  const child = group.locator('[data-agent-key="instance-alpha:working-child"]');
+  await child.locator(':scope > summary').click();
+  await expect(child.locator(':scope > article.session-card')).toBeVisible();
+  await expect.poll(() => polls).toBeGreaterThan(1);
+  await expect(group).toHaveAttribute('open', '');
+  await expect(child).toHaveAttribute('open', '');
+
+  await page.getByText('Filter agents', { exact: true }).click();
+  await page.locator('#hide-finished').uncheck();
+  await expect(group.locator(':scope > summary')).toContainText('Subagents · 5');
+  await expect(group.getByText('Old finished child', { exact: true })).toBeVisible();
+  await expect(child).toHaveAttribute('open', '');
+  await group.locator(':scope > summary').click();
+  await expect(group.locator(':scope > summary')).toContainText('need attention');
 });
 
 test('searches todo content through nested sessions while preserving ancestor context and filters across polls', async ({ page }) => {
@@ -589,6 +629,9 @@ test('searches todo content through nested sessions while preserving ancestor co
   await expect(root.locator(':scope > summary')).toContainText('Build dashboard');
   await expect(page.getByText('Implement details', { exact: true })).toBeHidden();
   await root.locator(':scope > summary').click();
+  await root.locator(':scope > .subagent-group > summary').click();
+  const task = page.locator('[data-agent-key="instance-alpha:task-child"]');
+  await task.locator(':scope > summary').click();
   await expect(page.getByText('Implement details', { exact: true })).toBeVisible();
   await expect(page.getByText('Distinctive nested task text')).toBeVisible();
 
@@ -615,6 +658,7 @@ test('shows sanitized chronological per-agent activity and preserves expansion a
   await page.goto('/');
   const root = page.locator('details.agent-tree[data-agent-key="instance-alpha:root-alpha"]');
   await root.locator(':scope > summary.agent-tree-summary').click();
+  await root.locator(':scope > .subagent-group > summary').click();
   const timeline = root.locator(':scope > article.session-card details.activity-timeline');
   await expect(timeline).toContainText('Recent activity · 3');
   await timeline.locator('summary').click();
@@ -635,7 +679,9 @@ test('shows a compact empty activity state for agents without event history', as
   await page.goto('/');
   const root = page.locator('details.agent-tree[data-agent-key="instance-alpha:root-alpha"]');
   await root.locator(':scope > summary.agent-tree-summary').click();
+  await root.locator(':scope > .subagent-group > summary').click();
   const child = root.locator('[data-agent-key="instance-alpha:child-alpha"]');
+  await child.locator(':scope > summary').click();
   const timeline = child.locator(':scope > article.session-card details.activity-timeline');
   await timeline.locator('summary').click();
   await expect(timeline).toContainText('No recent activity reported.');
