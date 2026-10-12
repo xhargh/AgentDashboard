@@ -17,6 +17,7 @@ const expandedAgents = new Set();
 const collapsedAgents = new Set();
 const expandedSubagentGroups = new Set();
 const expandedActivity = new Set();
+const expandedExecution = new Set();
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 function formatTimestamp(value) {
   const date = new Date(value);
@@ -40,8 +41,8 @@ function reconcile(parent, desired) {
   const keyed = new Map([...parent.querySelectorAll('[data-agent-key]')].map(node => [node.dataset.agentKey, node]));
   function sync(current, next) {
     if (current.nodeType === Node.TEXT_NODE) { if (current.textContent !== next.textContent) current.textContent = next.textContent; return current; }
-    for (const attr of [...current.attributes]) if (!(current.tagName === 'DETAILS' && attr.name === 'open') && !next.hasAttribute(attr.name)) current.removeAttribute(attr.name);
-    for (const attr of [...next.attributes]) if (!(current.tagName === 'DETAILS' && attr.name === 'open') && current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value);
+    for (const attr of [...current.attributes]) if (!(current.tagName === 'DETAILS' && attr.name === 'open' && !current.classList.contains('execution-timeline')) && !next.hasAttribute(attr.name)) current.removeAttribute(attr.name);
+    for (const attr of [...next.attributes]) if (!(current.tagName === 'DETAILS' && attr.name === 'open' && !current.classList.contains('execution-timeline')) && current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value);
     reconcileChildren(current, [...next.childNodes]);
     return current;
   }
@@ -88,6 +89,74 @@ function descendantSessions(session, sessions) {
   }
   visit(session.id);
   return descendants;
+}
+function renderExecutionTimeline(instance, parent, eligible) {
+  const key = `execution:${instance.instanceId}:${parent.id}`;
+  const details = el('details', undefined, 'execution-timeline');
+  details.dataset.agentKey = key;
+  details.open = expandedExecution.has(key);
+  details.addEventListener('toggle', () => details.open ? expandedExecution.add(key) : expandedExecution.delete(key));
+  const intervalList = instance.timeline?.intervals;
+  const intervals = Array.isArray(intervalList) ? intervalList : [];
+  const descendants = descendantSessions(parent, instance.sessions).filter(session => eligible.has(session.id));
+  const rows = [parent, ...descendants].map(session => ({ session, intervals: intervals.filter(item => item.sessionId === session.id) }));
+  const relevant = rows.flatMap(row => row.intervals);
+  details.append(el('summary', 'Execution timeline', 'execution-heading'));
+  if (!relevant.length) {
+    const message = !instance.timeline
+      ? 'Timeline unavailable: this report does not include timeline history.'
+      : instance.timeline.partial
+        ? 'Partial history: no observed state transitions are available in the retained event history.'
+        : 'No observed state transitions in the retained event history.';
+    details.append(el('p', message, 'timeline-message'));
+    return details;
+  }
+  const times = relevant.flatMap(item => [Date.parse(item.startAt), item.endAt ? Date.parse(item.endAt) : Date.now()]).filter(Number.isFinite);
+  const min = Math.min(...times), max = Math.max(...times), span = Math.max(1, max - min);
+  const chart = el('div', undefined, 'timeline-chart'); chart.setAttribute('role', 'img');
+  chart.setAttribute('aria-label', 'Observed session states on a shared wall-clock time scale');
+  const axis = el('div', undefined, 'timeline-axis');
+  axis.append(el('span', formatTimestamp(min)), el('span', formatTimestamp(max)));
+  chart.append(axis);
+  for (const row of rows) {
+    const line = el('div', undefined, 'timeline-row');
+    const sessionLabel = `${row.session.title || 'Session'}${instance.online ? '' : ' · offline'}`;
+    line.append(el('span', sessionLabel, 'timeline-session'));
+    const track = el('div', undefined, 'timeline-track');
+    if (!row.intervals.length) {
+      const unknown = el('span', 'Unknown · partial history', 'timeline-interval timeline-unknown');
+      unknown.style.left = '0'; unknown.style.width = '100%';
+      track.append(unknown);
+    }
+    for (const item of row.intervals) {
+      const start = Date.parse(item.startAt), end = item.endAt ? Date.parse(item.endAt) : Date.now();
+      const block = el('span', item.status, `timeline-interval timeline-${item.status}`);
+      block.style.left = `${Math.max(0, (start - min) / span * 100)}%`;
+      block.style.width = `${Math.max(0.5, (end - start) / span * 100)}%`;
+      block.title = `${item.status} · ${formatTimestamp(item.startAt)}${item.endAt ? ` – ${formatTimestamp(item.endAt)}` : ' · ongoing'}`;
+      track.append(block);
+    }
+    line.append(track); chart.append(line);
+  }
+  if (relevant.some(item => !item.endAt)) {
+    for (const track of chart.querySelectorAll('.timeline-track')) {
+      const marker = el('span', undefined, 'timeline-now');
+      marker.setAttribute('aria-hidden', 'true');
+      marker.style.left = `${Math.max(0, (Date.now() - min) / span * 100)}%`;
+      track.append(marker);
+    }
+  }
+  const list = el('ol', undefined, 'timeline-list');
+  for (const item of [...relevant].sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt))) {
+    const session = instance.sessions.find(candidate => candidate.id === item.sessionId);
+    const text = `${session?.title || 'Session'} · ${item.status} · ${formatTimestamp(item.startAt)}${item.endAt ? ` to ${formatTimestamp(item.endAt)}` : ' · ongoing'}`;
+    list.append(el('li', text));
+  }
+  details.append(chart);
+  const legend = el('p', 'Working · Idle · Permission wait · Retry · Error · Offline · Unknown/partial', 'timeline-legend');
+  details.append(legend, list);
+  details.append(el('p', instance.timeline?.partial ? 'Partial history: earlier transitions may be missing or truncated.' : 'Intervals show observed event times; they do not represent compute time.', 'timeline-message'));
+  return details;
 }
 function tokenCount(usage) { return (usage?.input || 0) + (usage?.output || 0); }
 function renderMetrics(info, session, online, sessions) {
@@ -270,6 +339,7 @@ function render() {
         details.append(grid); card.append(details);
       }
       container.append(card);
+      if (!compact) container.append(renderExecutionTimeline(i, s, eligible));
       if (!compact && children.length) {
         const descendants = descendantSessions(s, i.sessions);
         const visible = descendants.filter(child => eligible.has(child.id));

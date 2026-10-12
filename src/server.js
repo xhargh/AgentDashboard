@@ -15,7 +15,7 @@ const assets = new Map(await Promise.all(publicAssets.map(async name =>
     type: mimeTypes[name.slice(name.lastIndexOf('.'))] }])));
 function equal(a, b) { const x = Buffer.from(a || ''), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); }
 const LIMITS = Object.freeze({ instances: 2000, sessionsPerReport: 1000, sessionsTotal: 20000,
-  eventsPerReport: 200, eventsTotal: 10000, field: 4096, summary: 200, pruneInterval: 60000 });
+  eventsPerReport: 200, eventsTotal: 10000, timelineIntervals: 1000, field: 4096, summary: 200, pruneInterval: 60000 });
 function boundedString(value, max = LIMITS.field) { return typeof value === 'string' && value.length <= max; }
 function validModel(model) {
   return model && typeof model === 'object' && !Array.isArray(model) &&
@@ -32,6 +32,14 @@ function validUsage(usage) {
     (usage.partial === undefined || typeof usage.partial === 'boolean');
 }
 function validTimestamp(value) { return value === null || boundedString(value, 40) && Number.isFinite(Date.parse(value)); }
+function validTimeline(timeline) {
+  return timeline && typeof timeline === 'object' && !Array.isArray(timeline) && typeof timeline.partial === 'boolean' &&
+    Array.isArray(timeline.intervals) && timeline.intervals.length <= LIMITS.timelineIntervals && timeline.intervals.every(interval =>
+      interval && boundedString(interval.sessionId, 200) && boundedString(interval.startAt, 40) && Number.isFinite(Date.parse(interval.startAt)) &&
+      (interval.endAt === null || validTimestamp(interval.endAt)) &&
+      ['busy', 'idle', 'waiting', 'error', 'retry'].includes(interval.status) &&
+      (interval.endAt === null || Date.parse(interval.endAt) >= Date.parse(interval.startAt)));
+}
 function validReport(v) {
   return v && typeof v.instanceId === 'string' && v.instanceId.length <= 100 &&
     (v.machineId === undefined || boundedString(v.machineId, 100)) && boundedString(v.host, 200) &&
@@ -51,7 +59,7 @@ function validReport(v) {
     (v.events === undefined || Array.isArray(v.events) && v.events.length <= LIMITS.eventsPerReport && v.events.every(e => e &&
       boundedString(e.sessionId, 200) && boundedString(e.timestamp, 40) && Number.isFinite(Date.parse(e.timestamp)) &&
       ['created','busy','idle','waiting','error','retry','permissionAnswered','deleted'].includes(e.kind) &&
-      boundedString(e.summary, LIMITS.summary)));
+      boundedString(e.summary, LIMITS.summary))) && (v.timeline === undefined || validTimeline(v.timeline));
 }
 export function createServer({ token, now = Date.now } = {}) {
   if (token && token.length < 24) throw new Error('AGENTDASHBOARD_TOKEN must contain at least 24 characters');

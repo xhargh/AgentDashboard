@@ -9,9 +9,10 @@ const summaries = {
 
 export function createActivityBuffer({ limit = MAX_ACTIVITY_EVENTS, maxAgeMs = MAX_ACTIVITY_AGE_MS, now = Date.now } = {}) {
   const events = [];
+  let truncated = false;
   const prune = () => {
     const cutoff = now() - maxAgeMs;
-    while (events.length && (events.length > limit || Date.parse(events[0].timestamp) < cutoff)) events.shift();
+    while (events.length && (events.length > limit || Date.parse(events[0].timestamp) < cutoff)) { events.shift(); truncated = true; }
   };
   return {
     record(sessionId, kind, timestamp = new Date(now()).toISOString()) {
@@ -24,5 +25,6 @@ export function createActivityBuffer({ limit = MAX_ACTIVITY_EVENTS, maxAgeMs = M
       prune();
     },
     snapshot() { prune(); return events.map(event => ({ ...event })); },
+    get truncated() { prune(); return truncated; },
   };
 }
