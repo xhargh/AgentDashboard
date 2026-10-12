@@ -13,7 +13,7 @@ const phases = {
   error: 'error', retry: 'retry', permissionAnswered: 'permission', deleted: 'lifecycle', toolActivity: 'tool',
 };
 const outcomes = { error: 'failure', deleted: 'completed' };
-const safeAttributeKeys = new Set(['attempt', 'durationMs', 'toolName', 'providerId', 'modelId', 'permissionType', 'nextRetryAt']);
+const safeAttributeKeys = new Set(['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'nextRetryAt']);
 
 function safeAttributes(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -40,6 +40,7 @@ export function normalizeObservabilityEvent({ instanceId = 'legacy', sessionId, 
     kind,
     phase: ['lifecycle', 'working', 'idle', 'permission', 'error', 'retry', 'tool'].includes(context.phase) ? context.phase : phases[kind],
     source: context.source === 'inferred' ? 'inferred' : 'observed',
+    timestampSource: context.timestampSource === 'source' ? 'source' : 'observed',
     summary: summaries[kind],
   };
   if (typeof context.parentSessionId === 'string' && context.parentSessionId.length <= 200) event.parentSessionId = context.parentSessionId;

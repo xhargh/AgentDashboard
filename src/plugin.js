@@ -322,7 +322,7 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           : status === 'completed' ? 'completed' : status === 'error' ? 'failure' : undefined;
         const partId = part.callID || part.id;
         const messageId = part.messageID || part.messageId;
-        if (outcome && partId && messageId) {
+        if (['pending', 'running', 'completed', 'error'].includes(status) && partId && messageId) {
           const timeValue = status === 'completed' || status === 'error'
             ? part.state.time?.end || part.state.time?.completed
             : part.state.time?.start;
@@ -330,8 +330,9 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
             : typeof timeValue === 'string' && Number.isFinite(Date.parse(timeValue)) ? new Date(timeValue).toISOString() : undefined;
           recordObserved(s, 'toolActivity', {
             phase: 'tool', outcome, messageId, toolCallId: partId,
+            timestampSource: timestamp ? 'source' : 'observed',
             eventId: `tool:${s.id}:${messageId}:${partId}:${status}`,
-            attributes: { toolName: part.tool },
+            attributes: { toolName: part.tool, toolStatus: status },
           }, timestamp);
         }
       }

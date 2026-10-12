@@ -226,6 +226,22 @@ test('bounds companion-lifetime timeline memory and marks discarded chronology p
   assert.equal(state.instances[0].timeline.intervals[0].startAt, stamp(1));
   assert.equal(state.instances[0].timeline.partial, true);
 });
+test('merges normalized event snapshots across the plugin rolling-window boundary', async t => {
+  const { request } = await start(t);
+  const send = value => request('/api/report', { method: 'POST', body: JSON.stringify(value) });
+  const event = n => normalizeObservabilityEvent({ instanceId: 'one', sessionId: 'parent',
+    timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString(), kind: 'toolActivity', phase: 'tool',
+    outcome: n % 2 ? 'started' : 'completed', messageId: 'message', toolCallId: `call-${n}`, eventId: `event-${n}` });
+  const first = report(); first.events = Array.from({ length: 200 }, (_, n) => event(n));
+  assert.equal((await send(first)).status, 200);
+  const next = report(); next.events = Array.from({ length: 200 }, (_, n) => event(n + 50));
+  assert.equal((await send(next)).status, 200);
+  const instance = (await (await request('/api/state')).json()).instances[0];
+  assert.equal(instance.events.length, 250);
+  assert.equal(instance.events[0].toolCallId, 'call-0');
+  assert.equal(instance.events.at(-1).toolCallId, 'call-249');
+  assert.equal(instance.eventsPartial, undefined);
+});
 test('tracks bounded idempotent usage per session and keeps latest context separate', async t => {
   const originalFetch = globalThis.fetch;
   const keys = ['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'AGENTDASHBOARD_TELEMETRY', 'XDG_CONFIG_HOME'];
@@ -478,7 +494,9 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   await emit('session.created', { info: { id: 'root', title: 'Parent', directory: dir } });
   await emit('session.created', { info: { id: 'child', parentID: 'root', title: 'Investigate', directory: dir } });
   await emit('session.status', { sessionID: 'child', status: { type: 'busy' } });
-  const toolPart = { sessionID: 'child', messageID: 'message-1', id: 'part-1', callID: 'call-1', type: 'tool', tool: 'bash', state: { status: 'running', input: { command: 'secret-value' } } };
+  const toolStartedAt = new Date(Date.now() - 5000).toISOString();
+  const toolFinishedAt = new Date(Date.now()).toISOString();
+  const toolPart = { sessionID: 'child', messageID: 'message-1', id: 'part-1', callID: 'call-1', type: 'tool', tool: 'bash', state: { status: 'running', time: { start: toolStartedAt }, input: { command: 'secret-value' } } };
   await emit('message.part.updated', { part: toolPart });
   await emit('message.part.updated', { part: toolPart });
   const running = await waitFor(i => i?.sessions.some(s => s.id === 'child' && s.activity === 'bash: running'));
@@ -493,8 +511,16 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   assert.equal(toolEvents[0].parentSessionId, 'root');
   assert.equal(toolEvents[0].phase, 'tool');
   assert.equal(toolEvents[0].outcome, 'started');
+  assert.equal(toolEvents[0].timestamp, toolStartedAt);
+  assert.equal(toolEvents[0].timestampSource, 'source');
   assert.equal(toolEvents[0].attributes.toolName, 'bash');
+  assert.equal(toolEvents[0].attributes.toolStatus, 'running');
   assert.doesNotMatch(JSON.stringify(waiting.events), /secret permission|secret prompt|secret-value|command/);
+  await emit('message.part.updated', { part: { ...toolPart, state: { status: 'completed', time: { start: toolStartedAt, end: toolFinishedAt } } } });
+  const completed = await waitFor(i => i?.events?.some(event => event.kind === 'toolActivity' && event.outcome === 'completed'));
+  const finishedCall = completed.events.find(event => event.kind === 'toolActivity' && event.outcome === 'completed');
+  assert.equal(finishedCall.timestamp, toolFinishedAt);
+  assert.equal(finishedCall.toolCallId, 'call-1');
   await emit('session.idle', { sessionID: 'child' });
   await waitFor(i => i?.sessions.find(s => s.id === 'child')?.status === 'idle');
   globalThis.fetch = async () => { throw new Error('Network offline'); };

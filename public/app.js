@@ -75,6 +75,53 @@ function activityEvents(instance, sessionId) {
     .filter(event => event?.sessionId === sessionId && eventKinds[event.kind] && Number.isFinite(Date.parse(event.timestamp)))
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)).slice(-5);
 }
+function toolExecutionSpans(instance, sessionId) {
+  const calls = new Map();
+  const allEvents = Array.isArray(instance.events) ? instance.events : [];
+  const session = instance.sessions.find(candidate => candidate.id === sessionId);
+  const deleted = allEvents.find(event => event?.sessionId === sessionId && event.kind === 'deleted');
+  const terminated = Boolean(session?.archived || deleted || session?.status === 'idle');
+  const terminatedAt = Number.isFinite(session?.archivedAt) ? session.archivedAt
+    : deleted?.timestamp || (session?.status === 'idle' ? session.stateChangedAt : undefined);
+  const events = allEvents.filter(event =>
+    event?.sessionId === sessionId && event.kind === 'toolActivity' && event.toolCallId && event.messageId && Number.isFinite(Date.parse(event.timestamp)))
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  for (const event of events) {
+    const key = `${event.messageId}\0${event.toolCallId}`;
+    if (!calls.has(key)) calls.set(key, { toolName: event.attributes?.toolName });
+    const call = calls.get(key);
+    if (event.attributes?.toolName) call.toolName = event.attributes.toolName;
+    if (event.attributes?.toolStatus) call.toolStatus = event.attributes.toolStatus;
+    if (event.outcome === 'started' && !call.start) call.start = event;
+    if (['completed', 'failure', 'cancelled'].includes(event.outcome)) call.finish = event;
+  }
+  return [...calls.values()].map(call => {
+    const startAt = call.start?.timestampSource === 'source' ? Date.parse(call.start.timestamp) : undefined;
+    const endAt = call.finish?.timestampSource === 'source' ? Date.parse(call.finish.timestamp) : undefined;
+    const ongoingCall = !call.finish && call.toolStatus !== 'pending';
+    const observedUntil = !ongoingCall ? undefined : Number.isFinite(terminatedAt) ? terminatedAt
+      : terminatedAt ? Date.parse(terminatedAt) : terminated ? instance.lastSeen : instance.online ? Date.now() : instance.lastSeen;
+    const durationOngoing = ongoingCall && !terminated && instance.online && Number.isFinite(startAt);
+    return {
+      toolName: call.toolName,
+      toolStatus: call.toolStatus,
+      outcome: call.finish?.outcome,
+      started: Boolean(call.start),
+      startObservedAt: call.start?.timestamp,
+      endObservedAt: call.finish?.timestamp || (terminated ? terminatedAt : undefined),
+      startSource: call.start?.timestampSource,
+      endSource: call.finish?.timestampSource || (terminated ? 'observed' : undefined),
+      durationMs: Number.isFinite(startAt) && Number.isFinite(endAt) && endAt >= startAt ? endAt - startAt
+        : ongoingCall && Number.isFinite(startAt) && Number.isFinite(observedUntil) && observedUntil >= startAt ? observedUntil - startAt : undefined,
+      durationOngoing,
+      incompleteReason: !call.finish && terminated ? 'session ended' : !call.finish && !instance.online ? 'connection lost' : undefined,
+    };
+  });
+}
+function formatDuration(milliseconds) {
+  return milliseconds < 1000 ? `${Math.round(milliseconds)} ms`
+    : milliseconds < 60000 ? `${(milliseconds / 1000).toFixed(1)} s` : `${(milliseconds / 60000).toFixed(1)} min`;
+}
 function descendantSessions(session, sessions) {
   const children = new Map();
   for (const candidate of sessions) {
@@ -394,8 +441,60 @@ function render() {
         }
         activity.append(list);
       }
+      const toolCalls = toolExecutionSpans(i, s.id);
+      let toolDetails;
+      if (toolCalls.length) {
+        const completedDurations = toolCalls.filter(call => !call.durationOngoing && Number.isFinite(call.durationMs));
+        const activeDurations = toolCalls.filter(call => call.durationOngoing && Number.isFinite(call.durationMs));
+        const failures = toolCalls.filter(call => call.outcome === 'failure').length;
+        const active = toolCalls.filter(call => !call.outcome && (call.toolStatus === 'running' || call.started && call.toolStatus !== 'pending')).length;
+        const pending = toolCalls.filter(call => !call.outcome && call.toolStatus === 'pending').length;
+        const longRunning = toolCalls.filter(call => Number.isFinite(call.durationMs) && call.durationMs >= 60000).length;
+        toolDetails = el('details', undefined, 'tool-spans');
+        const recordedDuration = completedDurations.length
+          ? ` · recorded ${formatDuration(completedDurations.reduce((sum, call) => sum + call.durationMs, 0))}${completedDurations.length < toolCalls.length ? ' · partial' : ''}` : '';
+        const activeDuration = activeDurations.length
+          ? ` · active elapsed ${formatDuration(activeDurations.reduce((sum, call) => sum + call.durationMs, 0))}` : '';
+        toolDetails.append(el('summary', `Tool calls · ${toolCalls.length}${failures ? ` · ${failures} failed` : ''}${pending ? ` · ${pending} pending` : ''}${active ? ` · ${active} active` : ''}${longRunning ? ` · ${longRunning} long-running` : ''}${recordedDuration}${activeDuration}${i.eventsPartial ? ' · history partial' : ''}`, 'tool-spans-summary'));
+        if (i.eventsPartial) toolDetails.append(el('p', 'Some tool events may have been truncated; unavailable starts or outcomes are not inferred.', 'timeline-message'));
+        const byTool = new Map();
+        for (const call of toolCalls) {
+          const name = call.toolName || 'Tool unavailable';
+          if (!byTool.has(name)) byTool.set(name, []);
+          byTool.get(name).push(call);
+        }
+        const categories = el('ul', undefined, 'tool-category-summary');
+        for (const [name, calls] of byTool) {
+          const known = calls.filter(call => Number.isFinite(call.durationMs) && !call.durationOngoing);
+          const duration = known.length
+            ? ` · recorded ${formatDuration(known.reduce((sum, call) => sum + call.durationMs, 0))}${known.length < calls.length ? ' · partial' : ''}` : '';
+          categories.append(el('li', `${name} · ${calls.length} call${calls.length === 1 ? '' : 's'}${duration}`));
+        }
+        toolDetails.append(categories);
+        if (toolCalls.length > 100) toolDetails.append(el('p', 'Showing the latest 100 calls.', 'timeline-message'));
+        const toolList = el('ol', undefined, 'tool-span-list');
+        for (const call of toolCalls.slice(-100)) {
+          const item = el('li', undefined, 'tool-span');
+          const result = call.outcome === 'completed' ? 'Completed' : call.outcome === 'failure' ? 'Failed'
+            : call.outcome === 'cancelled' ? 'Cancelled' : call.incompleteReason ? `Incomplete · ${call.incompleteReason}`
+              : call.toolStatus === 'pending' ? 'Pending' : 'Running';
+          const label = `${call.toolName || 'Tool'} · ${result}${call.durationMs === undefined ? '' : ` · ${formatDuration(call.durationMs)}${call.durationOngoing ? ' so far' : ''}`}`;
+          item.append(el('span', label));
+          const times = [];
+          if (call.startObservedAt) times.push(call.startSource === 'source'
+            ? `started ${formatTimestamp(call.startObservedAt)}` : `start time unavailable · first observed ${formatTimestamp(call.startObservedAt)}`);
+          else times.push('start time unavailable');
+          if (call.endObservedAt) times.push(call.endSource === 'source'
+            ? `ended ${formatTimestamp(call.endObservedAt)}` : `end time unavailable · last observed ${formatTimestamp(call.endObservedAt)}`);
+          else if (!call.outcome) times.push('end time unavailable');
+          item.append(el('small', times.join(' · ')));
+          toolList.append(item);
+        }
+        toolDetails.append(toolList);
+      }
       const state = el('div', undefined, 'session-state');
       state.append(el('small', s.agent || (s.parentID ? 'subagent' : 'agent'))); row.append(info, state); card.append(row, activity);
+      if (toolDetails) card.append(toolDetails);
       if (i.git?.root && !s.parentID) {
         const details = el('details'); details.dataset.instance = i.instanceId; details.append(el('summary', gitSummary(i.git)));
         const grid = el('div', undefined, 'git-grid');
