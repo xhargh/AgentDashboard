@@ -9,7 +9,7 @@ import { createActivityBuffer } from './activity-events.js';
 import { buildExecutionTimeline } from './execution-timeline.js';
 const exec = promisify(execFile);
 
-const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics', 'permissionDetails'];
+const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics', 'permissionDetails', 'mcpHealth'];
 const MAX_USAGE_MESSAGES = 100;
 const USAGE_KEYS = [['input', 'input'], ['output', 'output'], ['reasoning', 'reasoning'], ['cacheRead', 'cache', 'read'], ['cacheWrite', 'cache', 'write']];
 const permissionTitles = {
@@ -96,6 +96,38 @@ function lineCount(change, names) {
   for (const name of names) if (Number.isSafeInteger(change?.[name]) && change[name] >= 0) return change[name];
   return undefined;
 }
+function safeMcpName(value) {
+  if (typeof value !== 'string' || value.length > 80 || /[\/:@\\]|\b(token|secret|password|credential|authorization|api[_-]?key)\b/i.test(value)) return 'MCP server';
+  return /^[A-Za-z0-9_. -]{1,80}$/.test(value) ? value : 'MCP server';
+}
+function mcpState(value) {
+  const raw = typeof value === 'string' ? value : value?.status ?? value?.state ?? value?.connectionState;
+  if (raw === true) return 'connected';
+  if (raw === false) return 'disconnected';
+  if (typeof raw !== 'string') return 'unknown';
+  const state = raw.trim().toLowerCase();
+  if (/auth|unauthor|credential/.test(state)) return 'auth-required';
+  if (/disconnect|offline/.test(state)) return 'disconnected';
+  if (/connect|ready|online/.test(state)) return 'connected';
+  if (/fail|error/.test(state)) return 'failed';
+  return 'unknown';
+}
+function safeMcpTransitionTime(value) {
+  const result = suppliedTimestamp(value);
+  return result?.timestamp;
+}
+function normalizeMcpHealth(response, now = new Date().toISOString()) {
+  const raw = response?.data ?? response;
+  const values = Array.isArray(raw) ? raw.map(item => [item?.name, item])
+    : Array.isArray(raw?.servers) ? raw.servers.map(item => [item?.name, item])
+      : raw?.servers && typeof raw.servers === 'object' ? Object.entries(raw.servers)
+        : raw && typeof raw === 'object' ? Object.entries(raw) : [];
+  const servers = values.slice(0, 100).map(([name, value]) => {
+    const lastTransitionAt = safeMcpTransitionTime(value?.lastTransitionAt ?? value?.updatedAt);
+    return { name: safeMcpName(name), state: mcpState(value), ...(lastTransitionAt ? { lastTransitionAt } : {}) };
+  });
+  return { available: true, status: 'available', observedAt: now, servers, partial: values.length > servers.length };
+}
 function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
   if (value === undefined || value === '') return Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, true]));
   let config;
@@ -113,7 +145,7 @@ function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
   if (!categories.paths) categories.git = false;
   return categories;
 }
-function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events, eventsPartial, timeline, unassignedFileCount, unassignedFileChangesPartial }, privacy) {
+function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events, eventsPartial, timeline, unassignedFileCount, unassignedFileChangesPartial, mcpHealth }, privacy) {
   const report = { instanceId, machineId, generationStartedAt, host, pid, sessions: sessions.map(session => {
     const result = { id: session.id, status: session.status };
     if (session.parentID) result.parentID = session.parentID;
@@ -131,7 +163,6 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
     }
     if (session.retry) result.retry = session.retry;
     if (session.errorCategory) result.errorCategory = session.errorCategory;
-    if (privacy.permissionDetails && session.permissions?.length) result.permissions = session.permissions;
     if (privacy.permissionDetails && session.permissions?.length) result.permissions = session.permissions;
     for (const key of ['firstObservedAt', 'lastActivityAt', 'stateChangedAt']) if (session[key] !== undefined) result[key] = session[key];
     if (session.restored) result.restored = true;
@@ -156,6 +187,7 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
   if (eventsPartial) report.eventsPartial = true;
   if (unassignedFileCount) report.unassignedFileCount = unassignedFileCount;
   if (unassignedFileChangesPartial) report.unassignedFileChangesPartial = true;
+  if (privacy.mcpHealth && mcpHealth) report.mcpHealth = mcpHealth;
   if (privacy.paths) { report.directory = directory; report.worktree = worktree; }
   if (privacy.git) report.git = git;
   return report;
@@ -258,6 +290,7 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   const activityEvents = createActivityBuffer({ instanceId });
   let gitInfo = {}, lastGit = 0, sending = false, stopped = false, dirty = false, eventTimer;
   let retryTimer, failures = 0, nextAttempt = 0;
+  let mcpHealth, lastMcpAttempt = 0, mcpInFlight = false;
   const session = id => {
     if (!sessions.has(id)) sessions.set(id, createSession(id, { title: 'Untitled session', directory, status: 'idle', activity: 'Ready' }));
     return sessions.get(id);
@@ -274,6 +307,20 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   const recordObserved = (value, kind, context = {}, timestamp) => activityEvents.record(value.id, kind, timestamp, {
     parentSessionId: value.parentID, ...context,
   });
+  const refreshMcpHealth = (force = false) => {
+    if (!privacy.mcpHealth || stopped || mcpInFlight || Date.now() - lastMcpAttempt < (force ? 1000 : 60000)) return;
+    lastMcpAttempt = Date.now();
+    if (typeof client?.mcp?.status !== 'function') {
+      if (!mcpHealth) { mcpHealth = { available: false, status: 'unsupported', observedAt: new Date().toISOString(), servers: [] }; scheduleReport(); }
+      return;
+    }
+    mcpInFlight = true;
+    Promise.race([Promise.resolve().then(() => client.mcp.status()), new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('timeout')), 1500); timer.unref?.();
+    })]).then(response => { mcpHealth = normalizeMcpHealth(response); })
+      .catch(() => { mcpHealth = { available: false, status: 'unavailable', observedAt: new Date().toISOString(), servers: [] }; })
+      .finally(() => { mcpInFlight = false; scheduleReport(); });
+  };
   const updatePermissionRequest = (s, permission, updated = false) => {
     const idValue = permission?.id || permission?.permissionID || permission?.permissionId;
     const id = typeof idValue === 'string' && idValue.length <= 200 ? idValue : undefined;
@@ -350,7 +397,7 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           directory, worktree, sessions: [...sessions.values()], git: gitInfo, events: activityEvents.snapshot(),
           timeline: buildExecutionTimeline(activityEvents.snapshot(), [...sessions.values()], activityEvents.truncated),
           eventsPartial: activityEvents.truncated,
-          unassignedFileCount: unassignedFileKeys.size, unassignedFileChangesPartial }, privacy)), signal: AbortSignal.timeout(3000),
+          unassignedFileCount: unassignedFileKeys.size, unassignedFileChangesPartial, mcpHealth }, privacy)), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {
         await response.body?.cancel();
@@ -391,11 +438,14 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
     for (const [id, status] of Object.entries(statuses.data || {})) if (sessions.has(id)) session(id).status = status.type;
   } catch { /* Events still populate the dashboard when SDK discovery is unavailable. */ }
   void send();
+  void refreshMcpHealth();
   const timer = setInterval(() => void send(), 5000); timer.unref?.();
+  const mcpTimer = setInterval(() => refreshMcpHealth(), 60000); mcpTimer.unref?.();
   return {
     event: async ({ event }) => {
       const p = event.properties || {};
-      if (event.type === 'server.instance.disposed' && p.directory === directory) { stopped = true; clearInterval(timer); clearTimeout(eventTimer); clearTimeout(retryTimer); return; }
+      if (event.type === 'server.instance.disposed' && p.directory === directory) { stopped = true; clearInterval(timer); clearInterval(mcpTimer); clearTimeout(eventTimer); clearTimeout(retryTimer); return; }
+      if (event.type.startsWith('mcp.')) refreshMcpHealth(true);
       if (event.type === 'session.created' || event.type === 'session.updated') {
         const existed = sessions.has(p.info?.id);
         if (event.type === 'session.created' && p.info?.id && !p.info.parentID) {

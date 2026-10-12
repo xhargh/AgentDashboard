@@ -618,6 +618,30 @@ test('shows deduplicated provider and model changes in source timestamp order', 
   ]);
 });
 
+test('shows workspace-level MCP health without exposing endpoints or credentials', async ({ page }) => {
+  await installStateFixture(page, () => {
+    const state = report('MCP workspace', 'busy');
+    state.instances[0].mcpHealth = { available: true, status: 'available', observedAt: '2026-10-12T10:00:00Z', servers: [
+      { name: 'local-build', state: 'connected', lastTransitionAt: '2026-10-12T09:59:00Z' },
+      { name: 'auth-required', state: 'auth-required' },
+      { name: 'failing-server', state: 'failed' },
+    ] };
+    return state;
+  });
+  await page.goto('/');
+  const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  const group = root.locator('xpath=ancestor::details[contains(@class,"session-group")]').last();
+  if (await group.getAttribute('open') === null) await group.locator(':scope > summary').click();
+  await root.locator(':scope > summary').click();
+  const details = root.locator('article.session-card > details.mcp-health');
+  await expect(details.locator('> summary')).toContainText('Workspace MCP servers · 1 connected · 1 failed · 1 auth required');
+  await details.locator('> summary').click();
+  await expect(details.locator('li').nth(0)).toContainText('local-build · connected');
+  await expect(details.locator('li').nth(1)).toHaveText('auth-required · auth-required');
+  await expect(details.locator('li').nth(2)).toHaveText('failing-server · failed');
+  await expect(details).not.toContainText(/https?:|token|secret|credential/i);
+});
+
 test('shows observed delegation lifecycle, explicit task link, concurrent child and restored unknowns', async ({ page }) => {
   const start = Date.parse('2026-10-12T10:00:00Z');
   const stamp = seconds => new Date(start + seconds * 1000).toISOString();

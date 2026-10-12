@@ -797,6 +797,70 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
     await plugin.event({ event: { type: 'server.instance.disposed', properties: { directory } } });
   }
 });
+test('polls MCP health safely, falls back for older SDKs, and respects its privacy category', async t => {
+  const originalFetch = globalThis.fetch;
+  const keys = ['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'AGENTDASHBOARD_TELEMETRY', 'XDG_CONFIG_HOME'];
+  const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const config = await mkdtemp(join(tmpdir(), 'agentdashboard-mcp-health-'));
+  const reports = [];
+  let statusCalls = 0;
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(config, { recursive: true, force: true });
+  });
+  process.env.AGENTDASHBOARD_URL = 'http://127.0.0.1:4317';
+  process.env.AGENTDASHBOARD_TOKEN = token;
+  process.env.AGENTDASHBOARD_TELEMETRY = '{"paths":false}';
+  process.env.XDG_CONFIG_HOME = config;
+  globalThis.fetch = async (_url, init) => { reports.push(JSON.parse(init.body)); return new Response('', { status: 200 }); };
+  const client = {
+    session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) },
+    mcp: { status: async () => {
+      statusCalls++;
+      return { data: {
+        'local-build': { status: 'connected', updatedAt: '2026-10-12T10:00:00Z' },
+        'private-auth': { status: 'auth-required', endpoint: 'https://user:secret@private.example', token: 'PRIVATE_TOKEN' },
+        'failing-server': { status: 'failed', error: 'PRIVATE_ERROR_BODY' },
+        'offline-server': { status: 'disconnected' },
+        'new-sdk-state': { status: 'unexpected-future-status' },
+      } };
+    } },
+  };
+  const plugin = await AgentDashboardPlugin({ directory: '/tmp/mcp-health', client });
+  t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp/mcp-health' } } }));
+  for (let n = 0; n < 100 && !reports.find(report => report.mcpHealth?.available); n++) await new Promise(resolve => setTimeout(resolve, 20));
+  const health = reports.find(report => report.mcpHealth?.available)?.mcpHealth;
+  assert.equal(health.servers.length, 5);
+  assert.deepEqual(health.servers.map(server => [server.name, server.state]), [
+    ['local-build', 'connected'], ['private-auth', 'auth-required'], ['failing-server', 'failed'],
+    ['offline-server', 'disconnected'], ['new-sdk-state', 'unknown'],
+  ]);
+  assert.doesNotMatch(JSON.stringify(reports), /private\.example|PRIVATE_TOKEN|PRIVATE_ERROR_BODY/);
+  assert.equal(statusCalls, 1, 'ordinary heartbeats do not poll MCP status continuously');
+
+  const unsupported = await AgentDashboardPlugin({ directory: '/tmp/mcp-unsupported', client: { session: client.session } });
+  t.after(() => unsupported.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp/mcp-unsupported' } } }));
+  for (let n = 0; n < 100 && !reports.find(report => report.mcpHealth?.status === 'unsupported'); n++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(reports.some(report => report.mcpHealth?.status === 'unsupported'));
+
+  const failingMcp = await AgentDashboardPlugin({ directory: '/tmp/mcp-failed', client: {
+    session: client.session, mcp: { status: async () => { throw new Error('PRIVATE_MCP_FAILURE_DETAIL'); } },
+  } });
+  t.after(() => failingMcp.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp/mcp-failed' } } }));
+  for (let n = 0; n < 100 && !reports.find(report => report.mcpHealth?.status === 'unavailable'); n++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(reports.some(report => report.mcpHealth?.status === 'unavailable'));
+  assert.doesNotMatch(JSON.stringify(reports), /PRIVATE_MCP_FAILURE_DETAIL/);
+
+  process.env.AGENTDASHBOARD_TELEMETRY = '{"mcpHealth":false,"paths":false}';
+  const reportsBeforeDisabled = reports.length;
+  const privatePlugin = await AgentDashboardPlugin({ directory: '/tmp/mcp-private', client });
+  t.after(() => privatePlugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp/mcp-private' } } }));
+  for (let n = 0; n < 100 && reports.length === reportsBeforeDisabled; n++) await new Promise(resolve => setTimeout(resolve, 10));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(statusCalls, 1, 'disabled MCP telemetry does not call the SDK');
+  assert.equal(reports.at(-1).mcpHealth, undefined);
+});
 test('plugin keeps HTTP, network, and timeout failures out of client output', async t => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
