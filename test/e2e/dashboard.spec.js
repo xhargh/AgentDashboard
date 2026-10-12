@@ -122,7 +122,8 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(root.locator(':scope > summary .tree-title')).toHaveText('Build dashboard');
   await expect(root.locator(':scope > summary .badge')).toHaveText('busy');
   await root.locator(':scope > summary').click();
-  await expect(root.locator('.session-info > p.muted').first()).toHaveText('Computer alpha · OpenCode instance PID 2101 · /work/alpha/app');
+  await expect(root.locator('.session-info > p.muted').first()).toHaveText('Computer alpha · OpenCode instance PID 2101');
+  await expect(root.locator(':scope > summary .tree-directory')).toHaveAttribute('aria-label', 'Working directory: /work/alpha/app');
   await expect(page.getByText('Finished review', { exact: true })).toBeVisible();
   await expect(page.getByText('Unknown-age review', { exact: true })).toBeVisible();
 
@@ -310,7 +311,9 @@ test('agent summary keeps status and activity visible when expanded without repe
   await summary.click();
   await expect(tree).toHaveAttribute('open', '');
   await expect(summary.locator('.badge')).toHaveText('busy');
-  await expect(tree.locator(':scope > article.session-card .session-state .badge')).toHaveCount(1);
+  await expect(tree.locator(':scope > summary .badge')).toHaveCount(1);
+  await expect(tree.locator(':scope > article.session-card .badge')).toHaveCount(0);
+  await expect(tree.locator(':scope > article.session-card .activity')).toHaveCount(0);
   await expect(tree.locator(':scope > article.session-card .session-info > strong')).toHaveCount(0);
 });
 
@@ -370,7 +373,8 @@ test('renders status-only instances without optional metadata', async ({ page })
   }] }));
   await page.goto('/');
 
-  await expect(page.locator('#fleet').getByText('Computer private-host · OpenCode instance PID 42 · unknown path', { exact: true })).toBeVisible();
+  await expect(page.locator('#fleet').getByText('Computer private-host · OpenCode instance PID 42', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-agent-key="status-only:session"] > summary .tree-directory')).toHaveCount(0);
   await expect(page.getByText('Session', { exact: true })).toBeVisible();
   await expect(page.locator('[data-agent-key="status-only:session"] > summary .badge')).toHaveText('busy');
   await expect(page.getByText('undefined', { exact: true })).toHaveCount(0);
@@ -407,7 +411,9 @@ test('shows independent model, context, and token metrics and updates after comp
   const child = page.locator('[data-agent-key="instance-alpha:child-alpha"]');
   const childCard = child.locator(':scope > article.session-card');
   await expect(childCard.locator('.model-label')).toHaveText('Provider B / model-b');
-  await expect(childCard.locator('.variant-label')).toHaveText('Variant unavailable');
+  await expect(childCard.locator('.variant-label')).toHaveCount(0);
+  await expect(child.locator(':scope > summary .badge')).toHaveCount(1);
+  await expect(childCard.locator('.badge')).toHaveCount(0);
   await expect(childCard.locator('.context-warning-text')).toHaveText('Context estimate is at least 90%');
   await expect(childCard.locator('.usage-metric')).toContainText('Own · 12 input + output tokens');
 
@@ -425,11 +431,39 @@ test('unknown and privacy-limited metrics render placeholders without fabricated
   await page.goto('/');
   const card = page.locator('[data-agent-key="status-only:session"] .session-card');
   await expect(card.locator('.model-label')).toHaveText('Model unavailable');
-  await expect(card.locator('.variant-label')).toHaveText('Variant unavailable');
+  await expect(card.locator('.variant-label')).toHaveCount(0);
   await expect(card.locator('.context-unavailable')).toHaveText('Context unavailable');
   await expect(card.locator('.usage-pending')).toHaveText('Usage pending');
   await expect(card.locator('progress')).toHaveCount(0);
   await expect(card).not.toContainText('0%');
+});
+
+test('shows one accessible working directory and status, without idle activity duplication', async ({ page }) => {
+  const state = report();
+  const root = state.instances[0].sessions[0];
+  root.status = 'idle';
+  root.activity = 'Ready';
+  root.directory = '/work/projects/a-very-long-directory-name/dashboard';
+  const child = state.instances[0].sessions.find(session => session.id === 'child-alpha');
+  child.directory = '/work/projects/child';
+  child.activity = 'Idle';
+  await installStateFixture(page, () => state);
+  await page.goto('/');
+
+  const rootTree = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  await expect(rootTree.locator(':scope > summary .badge')).toHaveCount(1);
+  await expect(rootTree.locator(':scope > summary .tree-activity')).toHaveCount(0);
+  const rootPath = rootTree.locator(':scope > summary .tree-directory');
+  await expect(rootPath).toHaveAttribute('title', root.directory);
+  await expect(rootPath).toHaveAttribute('aria-label', `Working directory: ${root.directory}`);
+  await rootTree.locator(':scope > summary').click();
+  await expect(rootTree.locator(':scope > article .tree-directory, :scope > article code')).toHaveCount(0);
+  await expect(rootTree.locator(':scope > article .activity')).toHaveCount(0);
+
+  const childTree = page.locator('[data-agent-key="instance-alpha:child-alpha"]');
+  await expect(childTree.locator(':scope > summary .badge')).toHaveCount(1);
+  await expect(childTree.locator(':scope > summary .tree-activity')).toHaveCount(0);
+  await expect(childTree.locator(':scope > summary .tree-directory')).toHaveText('/work/projects/child');
 });
 
 test('warns per instance when reports use legacy host-based identity', async ({ page }) => {
