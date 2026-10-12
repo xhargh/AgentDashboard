@@ -33,6 +33,23 @@ function validUsage(usage) {
     (usage.partial === undefined || typeof usage.partial === 'boolean');
 }
 function validTimestamp(value) { return value === null || boundedString(value, 40) && Number.isFinite(Date.parse(value)); }
+function validObservabilityEvent(event, reportInstanceId) {
+  if (!event || !boundedString(event.sessionId, 200) || !boundedString(event.timestamp, 40) || !Number.isFinite(Date.parse(event.timestamp)) ||
+      !['created','busy','idle','waiting','error','retry','permissionAnswered','deleted','toolActivity'].includes(event.kind) || !boundedString(event.summary, LIMITS.summary)) return false;
+  if (event.schemaVersion === undefined) return true;
+  const attributes = event.attributes;
+  return event.schemaVersion === 1 && boundedString(event.id, 200) && boundedString(event.instanceId, 100) &&
+    event.instanceId === reportInstanceId &&
+    (event.parentSessionId === undefined || boundedString(event.parentSessionId, 200)) &&
+    (event.messageId === undefined || boundedString(event.messageId, 200)) &&
+    (event.toolCallId === undefined || boundedString(event.toolCallId, 200)) &&
+    ['lifecycle', 'working', 'idle', 'permission', 'error', 'retry', 'tool'].includes(event.phase) &&
+    ['observed', 'inferred'].includes(event.source) &&
+    (event.outcome === undefined || ['started', 'completed', 'failure', 'cancelled'].includes(event.outcome)) &&
+    (attributes === undefined || attributes && typeof attributes === 'object' && !Array.isArray(attributes) &&
+      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'providerId', 'modelId', 'permissionType', 'nextRetryAt'].includes(key) &&
+        (boundedString(value, 100) || Number.isSafeInteger(value) && value >= 0)));
+}
 function validTimeline(timeline) {
   return timeline && typeof timeline === 'object' && !Array.isArray(timeline) && typeof timeline.partial === 'boolean' &&
     Array.isArray(timeline.intervals) && timeline.intervals.length <= LIMITS.timelineIntervals && timeline.intervals.every(interval =>
@@ -42,6 +59,9 @@ function validTimeline(timeline) {
       (interval.endAt === null || Date.parse(interval.endAt) >= Date.parse(interval.startAt)));
 }
 function validReport(v) {
+  const eventsValid = !v || v.events === undefined || Array.isArray(v.events) && v.events.length <= LIMITS.eventsPerReport &&
+    v.events.every(event => validObservabilityEvent(event, v.instanceId)) &&
+    new Set(v.events.filter(event => event.schemaVersion !== undefined).map(event => event.id)).size === v.events.filter(event => event.schemaVersion !== undefined).length;
   return v && typeof v.instanceId === 'string' && v.instanceId.length <= 100 &&
     (v.machineId === undefined || boundedString(v.machineId, 100)) && boundedString(v.host, 200) &&
     (v.generationStartedAt === undefined || Number.isFinite(v.generationStartedAt)) &&
@@ -57,10 +77,7 @@ function validReport(v) {
         s.todos.every(todo => todo && boundedString(todo.content) && boundedString(todo.status, 40)))) &&
     (v.git === undefined || v.git && typeof v.git === 'object' && !Array.isArray(v.git) &&
       Object.entries(v.git).every(([key, value]) => boundedString(key, 100) && (typeof value !== 'string' || boundedString(value)))) &&
-    (v.events === undefined || Array.isArray(v.events) && v.events.length <= LIMITS.eventsPerReport && v.events.every(e => e &&
-      boundedString(e.sessionId, 200) && boundedString(e.timestamp, 40) && Number.isFinite(Date.parse(e.timestamp)) &&
-      ['created','busy','idle','waiting','error','retry','permissionAnswered','deleted'].includes(e.kind) &&
-      boundedString(e.summary, LIMITS.summary))) && (v.timeline === undefined || validTimeline(v.timeline));
+     eventsValid && (v.timeline === undefined || validTimeline(v.timeline));
 }
 export function createServer({ token, now = Date.now } = {}) {
   if (token && token.length < 24) throw new Error('AGENTDASHBOARD_TOKEN must contain at least 24 characters');

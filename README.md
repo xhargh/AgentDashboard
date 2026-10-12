@@ -72,6 +72,8 @@ In network mode, all API requests require the shared bearer token, including das
 
 The report sent to `/api/report` contains an instance UUID, stable machine UUID, host label, process ID, and a session list. Every session includes its ID and status, plus its parent session ID when present. By default it also contains session titles (`titles`), todo text/status (`tasks`), tool/agent activity (`toolActivity`), session/project/worktree paths (`paths`), a Git snapshot (`git`) with repository root, short status, recent commit subjects/dates, and worktree details, and model identifiers/variant/configured context capacity (`modelMetrics`). Git inspection uses bounded, read-only local subprocesses; no remotely supplied shell commands are run. Reports never include conversation prompts, assistant messages or model reasoning, raw tool arguments, or tool outputs. Titles, todo text, activity strings, model/provider identifiers, variants, Git subjects/status, and paths may themselves reveal sensitive information.
 
+The versioned lifecycle/tool observation event schema, timestamp meaning, stable ID rules and privacy allowlist are documented in [OBSERVABILITY.md](OBSERVABILITY.md).
+
 Configure plugin privacy with `AGENTDASHBOARD_TELEMETRY`, a JSON object set in the OpenCode process environment. For example:
 
 ```bash
