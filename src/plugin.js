@@ -131,12 +131,13 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
     if (session.restored) result.restored = true;
     return result;
   }) };
-  if (events?.length) report.events = events.filter(event => event.kind !== 'toolActivity' || privacy.toolActivity).map(event => {
+  if (events?.length) report.events = events.filter(event =>
+    (event.kind !== 'toolActivity' || privacy.toolActivity) && (event.kind !== 'modelSnapshot' || privacy.modelMetrics)).map(event => {
     const result = { ...event };
     if (result.attributes) {
       const attributes = { ...result.attributes };
       if (!privacy.toolActivity) { delete attributes.toolName; delete result.toolCallId; delete result.messageId; }
-      if (!privacy.modelMetrics) { delete attributes.providerId; delete attributes.modelId; }
+      if (!privacy.modelMetrics) { delete attributes.providerId; delete attributes.modelId; delete attributes.variant; }
       if (!privacy.permissionDetails) { delete attributes.permissionType; delete attributes.permissionTitle; delete attributes.permissionId; }
       if (!privacy.paths) delete attributes.path;
       if (Object.keys(attributes).length) result.attributes = attributes;
@@ -476,6 +477,14 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           const model = { providerID: p.info.providerID.slice(0, 200), modelID: p.info.modelID.slice(0, 200) };
           if (typeof p.info.variant === 'string') model.variant = p.info.variant.slice(0, 200);
           s.model = model;
+          if (typeof p.info.id === 'string' && p.info.id.length <= 200) {
+            const modelTime = suppliedTimestamp(p.info.time?.created ?? p.info.time?.completed);
+            recordObserved(s, 'modelSnapshot', {
+              phase: 'model', messageId: p.info.id, timestampSource: modelTime?.timestampSource || 'observed',
+              eventId: `model:${s.id}:${p.info.id}`,
+              attributes: { providerId: model.providerID, modelId: model.modelID, ...(model.variant ? { variant: model.variant } : {}) },
+            }, modelTime?.timestamp);
+          }
           void loadProviderModels().then(models => {
             const configured = models?.get(`${model.providerID}:${model.modelID}`);
             if (!configured || s.model !== model) return;

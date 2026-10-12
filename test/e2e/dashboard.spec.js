@@ -553,6 +553,34 @@ test('shows latest attributed file-change snapshot and unassigned workspace chan
   await expect(details).not.toContainText('a.ts');
 });
 
+test('shows deduplicated provider and model changes in source timestamp order', async ({ page }) => {
+  await installStateFixture(page, () => {
+    const state = report('Model transitions', 'busy');
+    const event = (id, modelId, timestamp) => ({
+      schemaVersion: 1, id, messageId: id, instanceId: 'instance-alpha', sessionId: 'root-alpha', timestamp,
+      timestampSource: 'source', kind: 'modelSnapshot', phase: 'model', source: 'observed', summary: 'Model observation',
+      attributes: { providerId: modelId === 'model-b' ? 'provider-b' : 'provider-a', modelId },
+    });
+    state.instances[0].events = [
+      event('message-a', 'model-a', '2026-10-12T10:00:00Z'),
+      event('message-c', 'model-a', '2026-10-12T10:00:02Z'),
+      event('message-b', 'model-b', '2026-10-12T10:00:01Z'),
+      event('message-b', 'model-b', '2026-10-12T10:00:01Z'),
+    ];
+    return state;
+  });
+  await page.goto('/');
+  const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  await root.locator(':scope > summary').click();
+  const modelHistory = root.locator('article.session-card > details.model-history');
+  await expect(modelHistory.locator('> summary')).toHaveText('Model changes · 2');
+  await modelHistory.locator('> summary').click();
+  await expect(modelHistory.locator('li')).toHaveText([
+    'provider-a/model-a → provider-b/model-b · 2026-10-12 10:00',
+    'provider-b/model-b → provider-a/model-a · 2026-10-12 10:00',
+  ]);
+});
+
 test('warns per instance when reports use legacy host-based identity', async ({ page }) => {
   const now = Date.now();
   await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [
