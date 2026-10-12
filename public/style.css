@@ -170,6 +170,10 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
 .timeline-now { position: absolute; z-index: 1; top: 0; height: 20px; border-left: 1px dashed var(--text); }
 .timeline-compaction-marker { position: absolute; z-index: 1; top: 0; height: 20px; border-left: 2px dotted #c19be8; }
 .timeline-compaction-swatch { display: inline-block; width: 2px; height: 10px; border-left: 2px dotted #c19be8; }
+.timeline-lifecycle-marker { position: absolute; z-index: 1; top: 3px; width: 6px; height: 6px; border-radius: 50%; background: #f3c66c; transform: translateX(-50%); }
+.timeline-lifecycle-deleted { background: #e77d7d; }
+.timeline-lifecycle-parent-resumed { background: #84cdb0; }
+.timeline-lifecycle-swatch { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #f3c66c; }
 .timeline-interval { position: absolute; top: 2px; min-width: 4px; height: 14px; overflow: hidden; border-radius: 3px; color: #101413; text-align: center; font-size: 9px; line-height: 14px; }
 .timeline-busy { background: #79c99b; }
 .timeline-idle { background: #8293a0; }

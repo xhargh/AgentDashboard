@@ -14,7 +14,7 @@ const phases = {
   error: 'error', retry: 'retry', permissionAnswered: 'permission', deleted: 'lifecycle', toolActivity: 'tool', fileChange: 'files', modelSnapshot: 'model', compaction: 'model',
 };
 const outcomes = { error: 'failure', deleted: 'completed' };
-const safeAttributeKeys = new Set(['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'variant', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory', 'fileKey', 'path', 'additions', 'deletions', 'changeType', 'snapshotId']);
+const safeAttributeKeys = new Set(['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'variant', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory', 'fileKey', 'path', 'additions', 'deletions', 'changeType', 'snapshotId', 'delegationId']);
 
 function safeAttributes(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;

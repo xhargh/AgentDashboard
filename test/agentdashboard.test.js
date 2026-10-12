@@ -498,7 +498,7 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   async function waitFor(predicate) { for (let n = 0; n < 100; n++) { const state = await (await request('/api/state')).json(); if (predicate(state.instances[0])) return state.instances[0]; await new Promise(r => setTimeout(r, 60)); } throw new Error('Report not received'); }
   const first = await waitFor(i => i?.git.status); assert.match(first.git.status, /file.txt/); assert.match(first.git.log, /Initial commit/); assert.ok(first.git.worktrees.includes('refs/heads/feature'));
   await emit('session.created', { info: { id: 'root', title: 'Parent', directory: dir } });
-  await emit('session.created', { info: { id: 'child', parentID: 'root', title: 'Investigate', directory: dir } });
+  await emit('session.created', { info: { id: 'child', parentID: 'root', title: 'Investigate', directory: dir, delegationID: 'task-call-1' } });
   await emit('session.status', { sessionID: 'child', status: { type: 'busy' } });
   const toolStartedAt = new Date(Date.now() - 5000).toISOString();
   const toolFinishedAt = new Date(Date.now()).toISOString();
@@ -519,6 +519,7 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   const waiting = await waitFor(i => i?.sessions.find(s => s.id === 'child')?.status === 'waiting' && i.sessions.find(s => s.id === 'child').permissions?.length === 2);
   assert.ok(waiting.events.some(event => event.sessionId === 'child' && event.kind === 'waiting'));
   assert.ok(waiting.events.some(event => event.sessionId === 'root' && event.kind === 'created'));
+  assert.equal(waiting.events.find(event => event.sessionId === 'child' && event.kind === 'created').attributes.delegationId, 'task-call-1');
   const permission = waiting.sessions.find(s => s.id === 'child').permissions[0];
   assert.equal(permission.id, 'permission-1');
   assert.equal(permission.type, 'bash');

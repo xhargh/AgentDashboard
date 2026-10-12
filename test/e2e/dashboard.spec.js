@@ -399,6 +399,8 @@ test('shows independent model, context, and token metrics and updates after comp
     return state;
   });
   await page.goto('/');
+  await page.getByText('Filter agents', { exact: true }).click();
+  await page.locator('#hide-finished').uncheck();
   const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
   await root.locator(':scope > summary').click();
   const rootCard = root.locator(':scope > article.session-card');
@@ -579,6 +581,61 @@ test('shows deduplicated provider and model changes in source timestamp order', 
     'provider-a/model-a → provider-b/model-b · 2026-10-12 10:00',
     'provider-b/model-b → provider-a/model-a · 2026-10-12 10:00',
   ]);
+});
+
+test('shows observed delegation lifecycle, explicit task link, concurrent child and restored unknowns', async ({ page }) => {
+  const start = Date.parse('2026-10-12T10:00:00Z');
+  const stamp = seconds => new Date(start + seconds * 1000).toISOString();
+  const event = (id, sessionId, kind, timestamp, attributes = {}, parentSessionId) => ({
+    schemaVersion: 1, id, instanceId: 'instance-alpha', sessionId, timestamp, timestampSource: 'source', kind,
+    phase: kind === 'toolActivity' ? 'tool' : kind === 'busy' ? 'working' : 'lifecycle', source: 'observed',
+    summary: kind === 'toolActivity' ? 'Tool activity' : kind === 'created' ? 'Session created' : kind === 'deleted' ? 'Session ended' : 'Agent started working',
+    ...(parentSessionId ? { parentSessionId } : {}), ...(Object.keys(attributes).length ? { attributes } : {}),
+  });
+  await installStateFixture(page, () => {
+    const state = report('Delegate task', 'busy', start + 12000);
+    state.instances[0].sessions.push(
+      { id: 'child-one', parentID: 'root-alpha', title: 'Linked child', status: 'idle', stateChangedAt: stamp(7) },
+      { id: 'child-two', parentID: 'root-alpha', title: 'Concurrent child', status: 'busy' },
+      { id: 'child-restored', parentID: 'root-alpha', title: 'Restored child', status: 'busy', restored: true },
+    );
+    state.instances[0].timeline = { partial: true, intervals: [
+      { sessionId: 'root-alpha', startAt: stamp(0), endAt: null, status: 'busy' },
+      { sessionId: 'child-one', startAt: stamp(1), endAt: stamp(7), status: 'busy' },
+      { sessionId: 'child-two', startAt: stamp(2), endAt: null, status: 'busy' },
+    ] };
+    state.instances[0].events = [
+      event('task-start', 'root-alpha', 'toolActivity', stamp(0), { toolName: 'task', toolStatus: 'running' }, undefined),
+      { ...event('task-call-start', 'root-alpha', 'toolActivity', stamp(0), { toolName: 'task', toolStatus: 'running' }), messageId: 'parent-message', toolCallId: 'task-call-1', outcome: 'started' },
+      { ...event('task-call-end', 'root-alpha', 'toolActivity', stamp(2), { toolName: 'task', toolStatus: 'completed' }), messageId: 'parent-message', toolCallId: 'task-call-1', outcome: 'completed' },
+      event('child-one-created', 'child-one', 'created', stamp(1), { delegationId: 'task-call-1' }, 'root-alpha'),
+      event('child-one-ended', 'child-one', 'deleted', stamp(7), {}, 'root-alpha'),
+      event('child-two-created', 'child-two', 'created', stamp(2), {}, 'root-alpha'),
+      event('parent-working-again', 'root-alpha', 'busy', stamp(9)),
+    ];
+    return state;
+  });
+  await page.goto('/');
+  await page.getByText('Filter agents', { exact: true }).click();
+  await page.locator('#hide-finished').uncheck();
+  const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  await root.locator(':scope > summary').click();
+  const group = root.locator(':scope > article.session-card > .subagent-group');
+  await group.locator('> summary').click();
+  const linked = page.locator('[data-agent-key="instance-alpha:child-one"]');
+  await linked.locator(':scope > summary').click();
+  await expect(linked.locator('.delegation-lifecycle')).toContainText('Explicitly linked to task call task-call-1');
+  await expect(linked.locator('.delegation-lifecycle')).toContainText('dispatch-to-start 1.0 s');
+  await expect(linked.locator('.delegation-lifecycle')).toContainText('source-timed interval 6.0 s');
+  const concurrent = page.locator('[data-agent-key="instance-alpha:child-two"]');
+  await concurrent.locator(':scope > summary').click();
+  await expect(concurrent.locator('.delegation-lifecycle')).toContainText('Task-call correlation unavailable');
+  const restored = page.locator('[data-agent-key="instance-alpha:child-restored"]');
+  await restored.locator(':scope > summary').click();
+  await expect(restored.locator('.delegation-lifecycle')).toContainText('Start time unavailable');
+  const timeline = root.locator('.execution-timeline');
+  await timeline.locator(':scope > summary').click();
+  await expect(timeline.locator('.timeline-lifecycle-marker')).toHaveCount(4);
 });
 
 test('warns per instance when reports use legacy host-based identity', async ({ page }) => {
@@ -899,7 +956,7 @@ test('execution timeline is collapsed, accessible, and retains state across poll
   await expect(timeline.locator('.timeline-details')).not.toHaveAttribute('open', '');
   await expect(timeline.locator('ol')).toContainText('busy');
   await expect(timeline.locator('ol')).toContainText('waiting');
-  await expect(timeline.locator('.timeline-legend-item')).toHaveCount(8);
+  await expect(timeline.locator('.timeline-legend-item')).toHaveCount(9);
   await expect(timeline.locator('.timeline-compaction-marker')).toHaveCount(1);
   await expect(timeline.locator('.timeline-row').first().locator('.timeline-interval')).toHaveCount(1);
   await expect(timeline.locator('.timeline-session').filter({ hasText: 'Archived child · ended' })).toHaveCount(1);

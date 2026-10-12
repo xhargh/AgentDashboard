@@ -91,6 +91,7 @@ function toolExecutionSpans(instance, sessionId) {
     const key = `${event.messageId}\0${event.toolCallId}`;
     if (!calls.has(key)) calls.set(key, { toolName: event.attributes?.toolName });
     const call = calls.get(key);
+    call.callId = event.toolCallId;
     if (event.attributes?.toolName) call.toolName = event.attributes.toolName;
     if (event.attributes?.toolStatus) call.toolStatus = event.attributes.toolStatus;
     if (event.outcome === 'started' && !call.start) call.start = event;
@@ -105,6 +106,7 @@ function toolExecutionSpans(instance, sessionId) {
     const durationOngoing = ongoingCall && !terminated && instance.online && Number.isFinite(startAt);
     return {
       toolName: call.toolName,
+      callId: call.callId,
       toolStatus: call.toolStatus,
       outcome: call.finish?.outcome,
       started: Boolean(call.start),
@@ -118,6 +120,45 @@ function toolExecutionSpans(instance, sessionId) {
       incompleteReason: !call.finish && terminated ? 'session ended' : !call.finish && !instance.online ? 'connection lost' : undefined,
     };
   });
+}
+function delegationLifecycle(instance, child) {
+  const lifecycle = (Array.isArray(instance.events) ? instance.events : []).filter(event =>
+    event?.sessionId === child.id && ['created', 'deleted'].includes(event.kind) && Number.isFinite(Date.parse(event.timestamp)))
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  const segments = [];
+  for (const event of lifecycle) {
+    if (event.kind === 'created') segments.push({ start: event, end: undefined });
+    else {
+      const active = [...segments].reverse().find(segment => !segment.end && Date.parse(event.timestamp) >= Date.parse(segment.start.timestamp));
+      if (active) active.end = event;
+    }
+  }
+  const latest = segments.at(-1);
+  const parentId = child.parentID;
+  const parentToolCalls = parentId ? toolExecutionSpans(instance, parentId) : [];
+  const delegationId = latest?.start.attributes?.delegationId;
+  const taskCall = delegationId ? parentToolCalls.find(call => call.callId === delegationId) : undefined;
+  const dispatchDelay = taskCall?.startSource === 'source' && latest?.start.timestampSource === 'source'
+    ? Date.parse(latest.start.timestamp) - Date.parse(taskCall.startObservedAt) : undefined;
+  const startAt = latest?.start.timestamp;
+  const endAt = latest?.end?.timestamp;
+  const durationMs = startAt && endAt ? Math.max(0, Date.parse(endAt) - Date.parse(startAt)) : undefined;
+  const sourceTimed = latest?.start.timestampSource === 'source' && latest?.end?.timestampSource === 'source';
+  return { latest, segments, delegationId, taskCall, dispatchDelay, durationMs, sourceTimed };
+}
+function lifecycleMarkers(instance, session, descendants) {
+  const events = Array.isArray(instance.events) ? instance.events : [];
+  const markers = events.filter(event => event?.sessionId === session.id && ['created', 'deleted'].includes(event.kind) && Number.isFinite(Date.parse(event.timestamp)))
+    .map(event => ({ timestamp: event.timestamp, kind: event.kind }));
+  if (!session.parentID) {
+    const childEnds = events.filter(event => event?.kind === 'deleted' && descendants.some(child => child.id === event.sessionId && child.parentID === session.id));
+    for (const end of childEnds) {
+      const resumed = events.filter(event => event?.sessionId === session.id && event.kind === 'busy' && Date.parse(event.timestamp) > Date.parse(end.timestamp))
+        .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))[0];
+      if (resumed) markers.push({ timestamp: resumed.timestamp, kind: 'parent-resumed' });
+    }
+  }
+  return markers;
 }
 function sessionFileChanges(instance, sessionId) {
   const events = (Array.isArray(instance.events) ? instance.events : []).filter(event =>
@@ -196,7 +237,8 @@ function renderExecutionTimeline(instance, parent) {
   const intervalList = instance.timeline?.intervals;
   const intervals = Array.isArray(intervalList) ? intervalList : [];
   const descendants = descendantSessions(parent, instance.sessions);
-  const rows = [parent, ...descendants].map(session => ({ session, intervals: intervals.filter(item => item.sessionId === session.id) }));
+  const rows = [parent, ...descendants].map(session => ({ session, intervals: intervals.filter(item => item.sessionId === session.id),
+    lifecycle: lifecycleMarkers(instance, session, descendants) }));
   const compactions = rows.map(row => ({ ...row, events: (Array.isArray(instance.events) ? instance.events : []).filter(event =>
     event?.sessionId === row.session.id && event.kind === 'compaction' && Number.isFinite(Date.parse(event.timestamp))) }));
   const intervalEnd = (item, session) => item.endAt ? Date.parse(item.endAt)
@@ -206,7 +248,8 @@ function renderExecutionTimeline(instance, parent) {
     !(item.status === 'idle' && index === list.length - 1 && item.endAt === null)));
   details.append(el('summary', 'Execution timeline', 'execution-heading'));
   const observedCompactions = compactions.flatMap(row => row.events);
-  if (!relevant.length && !observedCompactions.length) {
+  const observedLifecycle = rows.flatMap(row => row.lifecycle);
+  if (!relevant.length && !observedCompactions.length && !observedLifecycle.length) {
     const message = !instance.timeline
       ? 'Timeline unavailable: this report does not include timeline history.'
       : instance.timeline.partial
@@ -220,6 +263,7 @@ function renderExecutionTimeline(instance, parent) {
     ...rows.flatMap(row => row.intervals.filter(item => relevantSet.has(item))
       .flatMap(item => [Date.parse(item.startAt), intervalEnd(item, row.session)])),
     ...observedCompactions.map(event => Date.parse(event.timestamp)),
+    ...observedLifecycle.map(event => Date.parse(event.timestamp)),
   ].filter(Number.isFinite);
   const min = Math.min(...times), max = Math.max(...times), span = Math.max(1, max - min);
   const chart = el('div', undefined, 'timeline-chart'); chart.setAttribute('role', 'img');
@@ -268,6 +312,16 @@ function renderExecutionTimeline(instance, parent) {
       marker.style.left = `${Math.max(0, (Date.parse(event.timestamp) - min) / span * 100)}%`;
       track.append(marker);
     }
+    for (const event of row.lifecycle) {
+      const marker = el('span', undefined, `timeline-lifecycle-marker timeline-lifecycle-${event.kind}`);
+      const label = event.kind === 'created' ? 'Session start observed' : event.kind === 'deleted' ? 'Session end observed'
+        : 'Parent activity observed after child end; causal linkage unavailable';
+      marker.setAttribute('aria-label', `${label} at ${formatTimestamp(event.timestamp)}`);
+      marker.title = `${label} · ${formatTimestamp(event.timestamp)}`;
+      marker.dataset.time = String(Date.parse(event.timestamp));
+      marker.style.left = `${Math.max(0, (Date.parse(event.timestamp) - min) / span * 100)}%`;
+      track.append(marker);
+    }
     line.append(track); chart.append(line);
   }
   if (relevant.some(item => !item.endAt) && (instance.online || Number.isFinite(instance.lastSeen))) {
@@ -298,12 +352,15 @@ function renderExecutionTimeline(instance, parent) {
   const compactionLegend = el('span', undefined, 'timeline-legend-item');
   compactionLegend.append(el('span', undefined, 'timeline-compaction-swatch'), el('span', 'Compaction'));
   legend.append(compactionLegend);
+  const lifecycleLegend = el('span', undefined, 'timeline-legend-item');
+  lifecycleLegend.append(el('span', undefined, 'timeline-lifecycle-swatch'), el('span', 'Session lifecycle'));
+  legend.append(lifecycleLegend);
   const disclosure = el('details', undefined, 'timeline-details');
   disclosure.append(el('summary', 'Show interval details'), list);
   details.append(legend, disclosure);
   details.append(el('p', instance.timeline?.partial
     ? `Partial history: earlier transitions may be missing or truncated; earliest known event ${formatTimestamp(min)}.`
-    : !relevant.length ? 'Compaction markers show observed events; state intervals are unavailable.'
+    : !relevant.length ? 'Lifecycle/compaction markers show observed events; state intervals are unavailable.'
       : 'Intervals show observed event times; they do not represent compute time.', 'timeline-message'));
   function applyRange(active) {
     let from = Number(rangeStart.value), to = Number(rangeEnd.value);
@@ -328,6 +385,11 @@ function renderExecutionTimeline(instance, parent) {
       const marker = track.querySelector('.timeline-now');
       if (marker) marker.style.left = `${Math.min(100, Math.max(0, (Number(marker.dataset.time) - visibleStart) / visibleSpan * 100))}%`;
       for (const marker of track.querySelectorAll('.timeline-compaction-marker')) {
+        const time = Number(marker.dataset.time);
+        marker.hidden = time < visibleStart || time > visibleEnd;
+        marker.style.left = `${Math.min(100, Math.max(0, (time - visibleStart) / visibleSpan * 100))}%`;
+      }
+      for (const marker of track.querySelectorAll('.timeline-lifecycle-marker')) {
         const time = Number(marker.dataset.time);
         marker.hidden = time < visibleStart || time > visibleEnd;
         marker.style.left = `${Math.min(100, Math.max(0, (time - visibleStart) / visibleSpan * 100))}%`;
@@ -643,6 +705,25 @@ function render() {
           list.append(el('li', `${previous} → ${next} · ${time}`));
         }
         modelDetails.append(list); card.append(modelDetails);
+      }
+      if (s.parentID) {
+        const lifecycle = delegationLifecycle(i, s);
+        const delegationDetails = el('details', undefined, 'delegation-lifecycle');
+        delegationDetails.append(el('summary', `Child lifecycle · ${lifecycle.segments.length} observed run${lifecycle.segments.length === 1 ? '' : 's'}`, 'delegation-summary'));
+        const lifecycleList = el('ul', undefined, 'delegation-lifecycle-list');
+        if (!lifecycle.segments.length) lifecycleList.append(el('li', 'Start time unavailable · session restored or created before observed history'));
+        for (const segment of lifecycle.segments) {
+          const startText = segment.start.timestampSource === 'source' ? `Start ${formatTimestamp(segment.start.timestamp)}`
+            : `First observed ${formatTimestamp(segment.start.timestamp)}`;
+          const endText = segment.end ? segment.end.timestampSource === 'source'
+            ? `finish ${formatTimestamp(segment.end.timestamp)}` : `last observed ${formatTimestamp(segment.end.timestamp)}` : 'Finish not observed';
+          const duration = segment.end ? Math.max(0, Date.parse(segment.end.timestamp) - Date.parse(segment.start.timestamp)) : undefined;
+          const timing = duration === undefined ? '' : ` · ${lifecycle.sourceTimed ? 'source-timed interval' : 'observed lifecycle span'} ${formatDuration(duration)}`;
+          lifecycleList.append(el('li', `${startText} · ${endText}${timing}`));
+        }
+        if (lifecycle.taskCall) lifecycleList.append(el('li', `Explicitly linked to task call ${lifecycle.delegationId}${lifecycle.dispatchDelay >= 0 ? ` · dispatch-to-start ${formatDuration(lifecycle.dispatchDelay)}` : ''}`));
+        else lifecycleList.append(el('li', 'Task-call correlation unavailable; parent relationship is observed from session metadata'));
+        delegationDetails.append(lifecycleList); card.append(delegationDetails);
       }
       if (i.git?.root && !s.parentID) {
         const details = el('details'); details.dataset.instance = i.instanceId; details.append(el('summary', gitSummary(i.git)));

@@ -48,8 +48,8 @@ function validObservabilityEvent(event, reportInstanceId) {
     ['observed', 'inferred'].includes(event.source) &&
     (event.outcome === undefined || ['started', 'completed', 'failure', 'cancelled'].includes(event.outcome)) &&
     (attributes === undefined || attributes && typeof attributes === 'object' && !Array.isArray(attributes) &&
-      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'variant', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory', 'fileKey', 'path', 'additions', 'deletions', 'changeType', 'snapshotId'].includes(key) &&
-        (boundedString(value, key === 'path' ? 4096 : ['providerId', 'modelId', 'variant'].includes(key) ? 200 : 100) || Number.isSafeInteger(value) && value >= 0) &&
+      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'variant', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory', 'fileKey', 'path', 'additions', 'deletions', 'changeType', 'snapshotId', 'delegationId'].includes(key) &&
+        (boundedString(value, key === 'path' ? 4096 : ['providerId', 'modelId', 'variant', 'delegationId'].includes(key) ? 200 : 100) || Number.isSafeInteger(value) && value >= 0) &&
         (key !== 'toolStatus' || ['pending', 'running', 'completed', 'error'].includes(value)) &&
         (key !== 'errorCategory' || ['timeout', 'permission', 'cancelled', 'rate-limit', 'provider', 'tool', 'unknown'].includes(value)) &&
         (key !== 'permissionType' || ['read', 'write', 'edit', 'bash', 'webfetch', 'external_directory', 'doom_loop', 'task', 'unknown'].includes(value)) &&
