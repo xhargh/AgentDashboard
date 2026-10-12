@@ -35,7 +35,7 @@ function validUsage(usage) {
 function validTimestamp(value) { return value === null || boundedString(value, 40) && Number.isFinite(Date.parse(value)); }
 function validObservabilityEvent(event, reportInstanceId) {
   if (!event || !boundedString(event.sessionId, 200) || !boundedString(event.timestamp, 40) || !Number.isFinite(Date.parse(event.timestamp)) ||
-      !['created','busy','idle','waiting','error','retry','permissionAnswered','deleted','toolActivity'].includes(event.kind) || !boundedString(event.summary, LIMITS.summary)) return false;
+      !['created','busy','idle','waiting','error','retry','permissionAnswered','deleted','toolActivity','fileChange'].includes(event.kind) || !boundedString(event.summary, LIMITS.summary)) return false;
   if (event.schemaVersion === undefined) return true;
   const attributes = event.attributes;
   return event.schemaVersion === 1 && boundedString(event.id, 200) && boundedString(event.instanceId, 100) &&
@@ -44,16 +44,17 @@ function validObservabilityEvent(event, reportInstanceId) {
     (event.parentSessionId === undefined || boundedString(event.parentSessionId, 200)) &&
     (event.messageId === undefined || boundedString(event.messageId, 200)) &&
     (event.toolCallId === undefined || boundedString(event.toolCallId, 200)) &&
-    ['lifecycle', 'working', 'idle', 'permission', 'error', 'retry', 'tool'].includes(event.phase) &&
+    ['lifecycle', 'working', 'idle', 'permission', 'error', 'retry', 'tool', 'files'].includes(event.phase) &&
     ['observed', 'inferred'].includes(event.source) &&
     (event.outcome === undefined || ['started', 'completed', 'failure', 'cancelled'].includes(event.outcome)) &&
     (attributes === undefined || attributes && typeof attributes === 'object' && !Array.isArray(attributes) &&
-      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory'].includes(key) &&
-        (boundedString(value, 100) || Number.isSafeInteger(value) && value >= 0) &&
+      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory', 'fileKey', 'path', 'additions', 'deletions', 'changeType', 'snapshotId'].includes(key) &&
+        (boundedString(value, key === 'path' ? 4096 : 100) || Number.isSafeInteger(value) && value >= 0) &&
         (key !== 'toolStatus' || ['pending', 'running', 'completed', 'error'].includes(value)) &&
         (key !== 'errorCategory' || ['timeout', 'permission', 'cancelled', 'rate-limit', 'provider', 'tool', 'unknown'].includes(value)) &&
         (key !== 'permissionType' || ['read', 'write', 'edit', 'bash', 'webfetch', 'external_directory', 'doom_loop', 'task', 'unknown'].includes(value)) &&
-        (key !== 'permissionTitle' || ['Read files', 'Write files', 'Edit files', 'Run command', 'Access web', 'Access external directory', 'Continue loop', 'Launch subtask', 'Permission details unavailable'].includes(value))));
+        (key !== 'permissionTitle' || ['Read files', 'Write files', 'Edit files', 'Run command', 'Access web', 'Access external directory', 'Continue loop', 'Launch subtask', 'Permission details unavailable'].includes(value)) &&
+        (key !== 'changeType' || ['snapshot', 'incremental', 'unassigned'].includes(value))));
 }
 function validTimeline(timeline) {
   return timeline && typeof timeline === 'object' && !Array.isArray(timeline) && typeof timeline.partial === 'boolean' &&
@@ -68,10 +69,13 @@ function validReport(v) {
     v.events.every(event => validObservabilityEvent(event, v.instanceId)) &&
     new Set(v.events.filter(event => event.schemaVersion !== undefined).map(event => event.id)).size === v.events.filter(event => event.schemaVersion !== undefined).length;
   return v && typeof v.instanceId === 'string' && v.instanceId.length <= 100 &&
+    (v.eventsPartial === undefined || typeof v.eventsPartial === 'boolean') &&
+    (v.unassignedFileChangesPartial === undefined || typeof v.unassignedFileChangesPartial === 'boolean') &&
     (v.machineId === undefined || boundedString(v.machineId, 100)) && boundedString(v.host, 200) &&
     (v.generationStartedAt === undefined || Number.isFinite(v.generationStartedAt)) &&
     (v.pid === undefined || Number.isInteger(v.pid)) &&
-    (v.directory === undefined || boundedString(v.directory)) &&
+     (v.directory === undefined || boundedString(v.directory)) &&
+     (v.unassignedFileCount === undefined || Number.isSafeInteger(v.unassignedFileCount) && v.unassignedFileCount >= 0 && v.unassignedFileCount <= 50000) &&
     Array.isArray(v.sessions) && v.sessions.length <= LIMITS.sessionsPerReport && v.sessions.every(s => s && boundedString(s.id, 200) &&
       boundedString(s.status, 40) && (s.title === undefined || boundedString(s.title)) && (s.directory === undefined || boundedString(s.directory)) &&
        (s.activity === undefined || boundedString(s.activity)) && (s.agent === undefined || boundedString(s.agent, 200)) &&
@@ -150,14 +154,14 @@ export function createServer({ token, now = Date.now } = {}) {
     }
     return { partial, intervals };
   };
-  const mergeEvents = (previous, incoming) => {
+  const mergeEvents = (previous, incoming, incomingPartial = false) => {
     const eventsById = new Map();
     for (const event of previous?.events || []) eventsById.set(event.id || JSON.stringify([event.sessionId, event.timestamp, event.kind]), event);
     for (const event of incoming || []) eventsById.set(event.id || JSON.stringify([event.sessionId, event.timestamp, event.kind]), event);
     const events = [...eventsById.values()].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
     const partial = events.length > LIMITS.eventsPerInstance;
     if (partial) events.splice(0, events.length - LIMITS.eventsPerInstance);
-    return { events, partial: Boolean(previous?.eventsPartial || partial) };
+    return { events, partial: Boolean(previous?.eventsPartial || incomingPartial || partial) };
   };
   const trimTimelineCapacity = () => {
     let count = [...instances.values()].reduce((sum, instance) => sum + (instance.timeline?.intervals.length || 0), 0);
@@ -229,7 +233,7 @@ export function createServer({ token, now = Date.now } = {}) {
           }
           const previous = instances.get(v.instanceId);
           const timeline = mergeTimeline(previous?.timeline, v.timeline);
-          const eventHistory = mergeEvents(previous, v.events);
+          const eventHistory = mergeEvents(previous, v.events, v.eventsPartial);
           const sessionsById = new Map(v.sessions.map(session => [session.id, session]));
           const timelineSessionIds = new Set((timeline?.intervals || []).map(interval => interval.sessionId));
           const deletedAt = new Map((v.events || []).filter(event => event.kind === 'deleted').map(event => [event.sessionId, event.timestamp]));

@@ -68,7 +68,7 @@ const eventKinds = {
   created: ['Session created', 'activity-created'], busy: ['Working', 'activity-work'], idle: ['Became idle', 'activity-complete'],
   waiting: ['Permission requested', 'activity-permission'], error: ['Error', 'activity-error'], retry: ['Retrying', 'activity-work'],
   permissionAnswered: ['Permission answered', 'activity-permission'], deleted: ['Session ended', 'activity-complete'],
-  toolActivity: ['Tool activity', 'activity-work'],
+  toolActivity: ['Tool activity', 'activity-work'], fileChange: ['File change', 'activity-work'],
 };
 function activityEvents(instance, sessionId) {
   return (Array.isArray(instance.events) ? instance.events : [])
@@ -117,6 +117,33 @@ function toolExecutionSpans(instance, sessionId) {
       incompleteReason: !call.finish && terminated ? 'session ended' : !call.finish && !instance.online ? 'connection lost' : undefined,
     };
   });
+}
+function sessionFileChanges(instance, sessionId) {
+  const events = (Array.isArray(instance.events) ? instance.events : []).filter(event =>
+    event?.sessionId === sessionId && event.kind === 'fileChange' && event.attributes?.fileKey);
+  let snapshotIndex = -1, snapshotId;
+  for (let index = 0; index < events.length; index++) if (events[index].attributes.changeType === 'snapshot' && events[index].attributes.fileKey === '__snapshot__') {
+    snapshotIndex = index; snapshotId = events[index].attributes.snapshotId;
+  }
+  const files = new Map();
+  events.forEach((event, index) => {
+    const attributes = event.attributes;
+    if (attributes.fileKey === '__snapshot__') return;
+    const belongsToLatestSnapshot = snapshotId && attributes.changeType === 'snapshot' && attributes.snapshotId === snapshotId;
+    const isLaterIncremental = snapshotIndex >= 0 && index > snapshotIndex && attributes.changeType === 'incremental';
+    if (snapshotIndex >= 0 ? !belongsToLatestSnapshot && !isLaterIncremental : attributes.changeType === 'snapshot') return;
+    files.set(attributes.fileKey, { path: attributes.path, additions: attributes.additions, deletions: attributes.deletions });
+  });
+  const changes = [...files.values()];
+  const additions = changes.filter(change => Number.isSafeInteger(change.additions));
+  const deletions = changes.filter(change => Number.isSafeInteger(change.deletions));
+  return {
+    files: changes,
+    additions: additions.reduce((sum, change) => sum + change.additions, 0),
+    deletions: deletions.reduce((sum, change) => sum + change.deletions, 0),
+    countsPartial: additions.length < changes.length || deletions.length < changes.length,
+    historyPartial: Boolean(instance.eventsPartial),
+  };
 }
 function formatDuration(milliseconds) {
   return milliseconds < 1000 ? `${Math.round(milliseconds)} ms`
@@ -422,6 +449,7 @@ function render() {
        info.append(el('p', `Computer ${i.host} · OpenCode instance PID ${i.pid ?? 'unknown'}`, 'muted'));
        if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
        if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
+       if (!s.parentID && i.unassignedFileCount) info.append(el('p', `Workspace changes not attributed to a session · ${i.unassignedFileChangesPartial ? 'at least ' : ''}${i.unassignedFileCount} file${i.unassignedFileCount === 1 ? '' : 's'}`, 'unassigned-changes'));
        if (s.status === 'retry') {
          const elapsed = Number.isFinite(Date.parse(s.stateChangedAt)) ? formatDuration(Math.max(0, Date.now() - Date.parse(s.stateChangedAt))) : undefined;
          const deadline = s.retry?.nextRetryAt, wait = Number.isFinite(Date.parse(deadline)) ? Date.parse(deadline) - Date.now() : undefined;
@@ -467,6 +495,12 @@ function render() {
           const date = new Date(event.timestamp), time = el('time', formatTimestamp(event.timestamp)); time.dateTime = date.toISOString();
           item.append(el('span', label, 'activity-kind'), time);
           if (event.attributes?.permissionTitle) item.append(el('span', `${event.attributes.permissionTitle} · ${event.attributes.permissionType || 'permission type unavailable'}`, 'activity-detail'));
+          if (event.kind === 'fileChange' && event.attributes?.fileKey !== '__snapshot__') {
+            const details = [event.attributes?.path || 'File path unavailable'];
+            if (Number.isSafeInteger(event.attributes?.additions)) details.push(`+${event.attributes.additions}`);
+            if (Number.isSafeInteger(event.attributes?.deletions)) details.push(`−${event.attributes.deletions}`);
+            item.append(el('span', details.join(' · '), 'activity-detail'));
+          }
           list.append(item);
         }
         activity.append(list);
@@ -522,9 +556,27 @@ function render() {
         }
         toolDetails.append(toolList);
       }
+      const fileChanges = sessionFileChanges(i, s.id);
+      let fileDetails;
+      if (fileChanges.files.length) {
+        fileDetails = el('details', undefined, 'file-changes');
+        const additions = fileChanges.files.every(change => Number.isSafeInteger(change.additions)) ? fileChanges.additions : 'unavailable';
+        const deletions = fileChanges.files.every(change => Number.isSafeInteger(change.deletions)) ? fileChanges.deletions : 'unavailable';
+        const stats = ` · +${additions} / −${deletions}${fileChanges.countsPartial ? ' lines partial' : ''}`;
+        fileDetails.append(el('summary', `File changes · ${fileChanges.files.length}${stats}${fileChanges.historyPartial ? ' · history partial' : ''}`, 'file-changes-summary'));
+        if (fileChanges.historyPartial) fileDetails.append(el('p', 'File-change history may be incomplete.', 'timeline-message'));
+        const list = el('ul', undefined, 'file-change-list');
+        for (const change of fileChanges.files) {
+          const count = Number.isSafeInteger(change.additions) || Number.isSafeInteger(change.deletions)
+            ? ` · +${change.additions ?? 'unavailable'} / −${change.deletions ?? 'unavailable'}` : '';
+          list.append(el('li', `${change.path || 'File path unavailable'}${count}`));
+        }
+        fileDetails.append(list);
+      }
       const state = el('div', undefined, 'session-state');
       state.append(el('small', s.agent || (s.parentID ? 'subagent' : 'agent'))); row.append(info, state); card.append(row, activity);
       if (toolDetails) card.append(toolDetails);
+      if (fileDetails) card.append(fileDetails);
       if (i.git?.root && !s.parentID) {
         const details = el('details'); details.dataset.instance = i.instanceId; details.append(el('summary', gitSummary(i.git)));
         const grid = el('div', undefined, 'git-grid');

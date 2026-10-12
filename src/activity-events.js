@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash as hashEventId } from 'node:crypto';
 
 export const MAX_ACTIVITY_EVENTS = 200;
 export const MAX_ACTIVITY_AGE_MS = 24 * 60 * 60 * 1000;
@@ -6,21 +6,21 @@ export const MAX_ACTIVITY_AGE_MS = 24 * 60 * 60 * 1000;
 const summaries = {
   created: 'Session created', busy: 'Agent started working', idle: 'Agent became idle',
   waiting: 'Permission requested', error: 'Agent encountered an error', retry: 'Agent retrying',
-  permissionAnswered: 'Permission answered', deleted: 'Session ended', toolActivity: 'Tool activity',
+  permissionAnswered: 'Permission answered', deleted: 'Session ended', toolActivity: 'Tool activity', fileChange: 'File change',
 };
 const phases = {
   created: 'lifecycle', busy: 'working', idle: 'idle', waiting: 'permission',
-  error: 'error', retry: 'retry', permissionAnswered: 'permission', deleted: 'lifecycle', toolActivity: 'tool',
+  error: 'error', retry: 'retry', permissionAnswered: 'permission', deleted: 'lifecycle', toolActivity: 'tool', fileChange: 'files',
 };
 const outcomes = { error: 'failure', deleted: 'completed' };
-const safeAttributeKeys = new Set(['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory']);
+const safeAttributeKeys = new Set(['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory', 'fileKey', 'path', 'additions', 'deletions', 'changeType', 'snapshotId']);
 
 function safeAttributes(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const result = {};
   for (const [key, item] of Object.entries(value)) {
     if (!safeAttributeKeys.has(key)) continue;
-    if ((typeof item === 'string' && item.length <= 100) || (Number.isSafeInteger(item) && item >= 0)) result[key] = item;
+    if ((typeof item === 'string' && item.length <= (key === 'path' ? 4096 : 100)) || (Number.isSafeInteger(item) && item >= 0)) result[key] = item;
   }
   return Object.keys(result).length ? result : undefined;
 }
@@ -31,14 +31,14 @@ export function normalizeObservabilityEvent({ instanceId = 'legacy', sessionId, 
   const event = {
     schemaVersion: 1,
     id: typeof context.eventId === 'string' && context.eventId.length <= 200
-      ? createHash('sha256').update(JSON.stringify([instanceId, context.eventId])).digest('hex')
-      : createHash('sha256').update(JSON.stringify([instanceId, sessionId, timestamp, kind,
+      ? hashEventId('sha256').update(JSON.stringify([instanceId, context.eventId])).digest('hex')
+      : hashEventId('sha256').update(JSON.stringify([instanceId, sessionId, timestamp, kind,
         context.parentSessionId, context.messageId, context.toolCallId])).digest('hex'),
     instanceId,
     sessionId,
     timestamp,
     kind,
-    phase: ['lifecycle', 'working', 'idle', 'permission', 'error', 'retry', 'tool'].includes(context.phase) ? context.phase : phases[kind],
+    phase: ['lifecycle', 'working', 'idle', 'permission', 'error', 'retry', 'tool', 'files'].includes(context.phase) ? context.phase : phases[kind],
     source: context.source === 'inferred' ? 'inferred' : 'observed',
     timestampSource: context.timestampSource === 'source' ? 'source' : 'observed',
     summary: summaries[kind],
@@ -76,6 +76,7 @@ export function createActivityBuffer({ instanceId = 'legacy', limit = MAX_ACTIVI
       prune();
     },
     snapshot() { prune(); return events.map(event => ({ ...event, ...(event.attributes ? { attributes: { ...event.attributes } } : {}) })); },
+    markTruncated() { truncated = true; },
     get truncated() { prune(); return truncated; },
   };
 }

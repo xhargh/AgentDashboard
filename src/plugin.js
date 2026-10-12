@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, open, readFile, unlink } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
@@ -88,6 +88,13 @@ function safeErrorCategory(error) {
   if (/tool/.test(normalized)) return 'tool';
   return 'unknown';
 }
+function safeFilePath(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 4096 && !/[\u0000-\u001f]/.test(value) ? value : undefined;
+}
+function lineCount(change, names) {
+  for (const name of names) if (Number.isSafeInteger(change?.[name]) && change[name] >= 0) return change[name];
+  return undefined;
+}
 function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
   if (value === undefined || value === '') return Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, true]));
   let config;
@@ -105,7 +112,7 @@ function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
   if (!categories.paths) categories.git = false;
   return categories;
 }
-function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events, timeline }, privacy) {
+function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events, eventsPartial, timeline, unassignedFileCount, unassignedFileChangesPartial }, privacy) {
   const report = { instanceId, machineId, generationStartedAt, host, pid, sessions: sessions.map(session => {
     const result = { id: session.id, status: session.status };
     if (session.parentID) result.parentID = session.parentID;
@@ -131,12 +138,16 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
       if (!privacy.toolActivity) { delete attributes.toolName; delete result.toolCallId; delete result.messageId; }
       if (!privacy.modelMetrics) { delete attributes.providerId; delete attributes.modelId; }
       if (!privacy.permissionDetails) { delete attributes.permissionType; delete attributes.permissionTitle; delete attributes.permissionId; }
+      if (!privacy.paths) delete attributes.path;
       if (Object.keys(attributes).length) result.attributes = attributes;
       else delete result.attributes;
     } else if (!privacy.toolActivity) { delete result.toolCallId; delete result.messageId; }
     return result;
   });
   if (timeline) report.timeline = timeline;
+  if (eventsPartial) report.eventsPartial = true;
+  if (unassignedFileCount) report.unassignedFileCount = unassignedFileCount;
+  if (unassignedFileChangesPartial) report.unassignedFileChangesPartial = true;
   if (privacy.paths) { report.directory = directory; report.worktree = worktree; }
   if (privacy.git) report.git = git;
   return report;
@@ -216,6 +227,8 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   const generationStartedAt = Date.now();
   const machine = await machineId();
   const sessions = new Map();
+  const unassignedFileKeys = new Set();
+  let unassignedFileChangesPartial = false;
   let providerModelsPromise;
   const loadProviderModels = () => {
     if (providerModelsPromise) return providerModelsPromise;
@@ -283,6 +296,20 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
     }, request.requestedAt);
     return true;
   };
+  const recordFileChange = (s, change, changeType, snapshotId) => {
+    const path = safeFilePath(typeof change === 'string' ? change : change?.file || change?.path || change?.filename);
+    if (!path) return;
+    const fileKey = createHash('sha256').update(path).digest('hex');
+    const additions = lineCount(change, ['additions', 'linesAdded', 'added']);
+    const deletions = lineCount(change, ['deletions', 'linesRemoved', 'removed']);
+    const eventId = `file:${s.id}:${changeType}:${snapshotId || ''}:${fileKey}:${additions ?? ''}:${deletions ?? ''}`;
+    recordObserved(s, 'fileChange', {
+      phase: 'files', eventId,
+      attributes: { fileKey, ...(privacy.paths ? { path } : {}), ...(additions !== undefined ? { additions } : {}),
+        ...(deletions !== undefined ? { deletions } : {}), changeType, ...(snapshotId ? { snapshotId } : {}) },
+    });
+    return fileKey;
+  };
   const resolvePermissionRequest = (s, permission) => {
     const idValue = permission?.id || permission?.permissionID || permission?.permissionId;
     const id = typeof idValue === 'string' && idValue.length <= 200 ? idValue : undefined;
@@ -313,7 +340,9 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
         method: 'POST', redirect: 'error', headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'content-type': 'application/json' },
         body: JSON.stringify(privateReport({ instanceId, machineId: machine, generationStartedAt, host: process.env.AGENTDASHBOARD_HOST || hostname(), pid: process.pid,
           directory, worktree, sessions: [...sessions.values()], git: gitInfo, events: activityEvents.snapshot(),
-          timeline: buildExecutionTimeline(activityEvents.snapshot(), [...sessions.values()], activityEvents.truncated) }, privacy)), signal: AbortSignal.timeout(3000),
+          timeline: buildExecutionTimeline(activityEvents.snapshot(), [...sessions.values()], activityEvents.truncated),
+          eventsPartial: activityEvents.truncated,
+          unassignedFileCount: unassignedFileKeys.size, unassignedFileChangesPartial }, privacy)), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {
         await response.body?.cancel();
@@ -414,6 +443,31 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           s.activity = pendingPermission ? 'Waiting for permission' : 'Permission answered'; markActivity(s);
         }
         if (event.type === 'todo.updated') { s.todos = p.todos?.map(t => ({ content: t.content, status: t.status })); markActivity(s); }
+        if (event.type === 'file.edited') recordFileChange(s, p.file || p.path || p, 'incremental');
+        if (event.type === 'session.diff') {
+          const changes = Array.isArray(p.diff) ? p.diff : Array.isArray(p.diffs) ? p.diffs : [];
+          if (changes.length > 500) activityEvents.markTruncated();
+          const boundedChanges = changes.slice(0, 500);
+          const snapshots = boundedChanges.map(change => {
+            const path = safeFilePath(change?.file || change?.path || change?.filename);
+            if (!path) return undefined;
+            return { fileKey: createHash('sha256').update(path).digest('hex'),
+              additions: lineCount(change, ['additions', 'linesAdded', 'added']),
+              deletions: lineCount(change, ['deletions', 'linesRemoved', 'removed']) };
+          }).filter(Boolean);
+          const snapshotId = createHash('sha256').update(JSON.stringify(snapshots)).digest('hex');
+          recordObserved(s, 'fileChange', { phase: 'files', eventId: `file-snapshot:${s.id}:${snapshotId}`,
+            attributes: { fileKey: '__snapshot__', changeType: 'snapshot', snapshotId } });
+          for (const change of boundedChanges) recordFileChange(s, change, 'snapshot', snapshotId);
+        }
+      }
+      if ((event.type === 'file.edited' || event.type === 'file.watcher.updated') && !p.sessionID) {
+        const path = safeFilePath(p.file || p.path);
+        if (path) {
+          const fileKey = createHash('sha256').update(path).digest('hex');
+          if (unassignedFileKeys.has(fileKey) || unassignedFileKeys.size < 10000) unassignedFileKeys.add(fileKey);
+          else unassignedFileChangesPartial = true;
+        }
       }
       if (event.type === 'message.updated' && p.info?.sessionID) {
         const s = session(p.info.sessionID); s.agent = p.info.agent || p.info.mode || s.agent;
