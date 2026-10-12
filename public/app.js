@@ -430,6 +430,27 @@ function render() {
          info.append(el('p', retryText, 'retry-context'));
        }
        if (s.status === 'error') info.append(el('p', `Last safe error category · ${s.errorCategory || 'unavailable'}`, 'error-context'));
+       if (s.permissions?.length) {
+         const pendingPermissions = s.permissions.filter(permission => permission.status === 'pending').length;
+         const permissionDetails = el('details', undefined, 'permission-details');
+         permissionDetails.append(el('summary', `Permissions · ${pendingPermissions} waiting`, 'permission-summary'));
+         const permissionList = el('ul', undefined, 'permission-list');
+         for (const permission of s.permissions) {
+           const item = el('li', undefined, 'permission-item');
+           const title = permission.title || 'Permission details unavailable';
+           item.append(el('strong', `${title} · ${permission.type || 'type unavailable'}`));
+           if (permission.status === 'pending') {
+             const observedAt = Date.parse(permission.requestedAt);
+             const clock = i.online ? Date.now() : i.lastSeen;
+             const elapsed = Number.isFinite(observedAt) && Number.isFinite(clock) ? formatDuration(Math.max(0, clock - observedAt)) : undefined;
+             item.append(el('small', `${i.online ? 'Waiting' : 'Unresolved · agent offline'}${elapsed ? ` · ${elapsed}` : ' · elapsed time unavailable'}${permission.timestampSource === 'observed' ? ' · request time observed locally' : ''}`));
+           } else if (permission.status === 'responded') {
+             item.append(el('small', permission.resolution === 'approved' ? 'Responded · approved' : permission.resolution === 'rejected' ? 'Responded · rejected' : 'Responded · result unavailable'));
+           } else item.append(el('small', permission.status === 'ended' ? 'Session ended before reply was observed' : 'Resolution unknown'));
+           permissionList.append(item);
+         }
+         permissionDetails.append(permissionList); info.append(permissionDetails);
+       }
          renderMetrics(info, s, i.online, i.sessions);
       if (s.todos?.length) { const todos = el('ul', undefined, 'todos'); for (const t of s.todos) todos.append(el('li', `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'} ${t.content}`)); info.append(todos); }
       const events = activityEvents(i, s.id), activityKey = `${i.instanceId}:${s.id}`;
@@ -445,6 +466,7 @@ function render() {
           const [label, kindClass] = eventKinds[event.kind], item = el('li', undefined, `activity-event ${kindClass}`);
           const date = new Date(event.timestamp), time = el('time', formatTimestamp(event.timestamp)); time.dateTime = date.toISOString();
           item.append(el('span', label, 'activity-kind'), time);
+          if (event.attributes?.permissionTitle) item.append(el('span', `${event.attributes.permissionTitle} · ${event.attributes.permissionType || 'permission type unavailable'}`, 'activity-detail'));
           list.append(item);
         }
         activity.append(list);

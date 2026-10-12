@@ -48,10 +48,12 @@ function validObservabilityEvent(event, reportInstanceId) {
     ['observed', 'inferred'].includes(event.source) &&
     (event.outcome === undefined || ['started', 'completed', 'failure', 'cancelled'].includes(event.outcome)) &&
     (attributes === undefined || attributes && typeof attributes === 'object' && !Array.isArray(attributes) &&
-      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'nextRetryAt', 'errorCategory'].includes(key) &&
+      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory'].includes(key) &&
         (boundedString(value, 100) || Number.isSafeInteger(value) && value >= 0) &&
         (key !== 'toolStatus' || ['pending', 'running', 'completed', 'error'].includes(value)) &&
-        (key !== 'errorCategory' || ['timeout', 'permission', 'cancelled', 'rate-limit', 'provider', 'tool', 'unknown'].includes(value))));
+        (key !== 'errorCategory' || ['timeout', 'permission', 'cancelled', 'rate-limit', 'provider', 'tool', 'unknown'].includes(value)) &&
+        (key !== 'permissionType' || ['read', 'write', 'edit', 'bash', 'webfetch', 'external_directory', 'doom_loop', 'task', 'unknown'].includes(value)) &&
+        (key !== 'permissionTitle' || ['Read files', 'Write files', 'Edit files', 'Run command', 'Access web', 'Access external directory', 'Continue loop', 'Launch subtask', 'Permission details unavailable'].includes(value))));
 }
 function validTimeline(timeline) {
   return timeline && typeof timeline === 'object' && !Array.isArray(timeline) && typeof timeline.partial === 'boolean' &&
@@ -78,6 +80,13 @@ function validReport(v) {
          (s.retry.attempt === undefined || Number.isSafeInteger(s.retry.attempt) && s.retry.attempt >= 0) &&
          (s.retry.nextRetryAt === undefined || validTimestamp(s.retry.nextRetryAt))) &&
        (s.errorCategory === undefined || ['timeout', 'permission', 'cancelled', 'rate-limit', 'provider', 'tool', 'unknown'].includes(s.errorCategory)) &&
+       (s.permissions === undefined || Array.isArray(s.permissions) && s.permissions.length <= 50 && s.permissions.every(permission => permission &&
+         (permission.id === undefined || boundedString(permission.id, 200)) &&
+         (permission.type === undefined || ['read', 'write', 'edit', 'bash', 'webfetch', 'external_directory', 'doom_loop', 'task', 'unknown'].includes(permission.type)) &&
+         (permission.title === undefined || ['Read files', 'Write files', 'Edit files', 'Run command', 'Access web', 'Access external directory', 'Continue loop', 'Launch subtask', 'Permission details unavailable'].includes(permission.title)) &&
+         validTimestamp(permission.requestedAt) && ['pending', 'responded', 'ended', 'unknown'].includes(permission.status) &&
+         (permission.timestampSource === undefined || ['source', 'observed'].includes(permission.timestampSource)) &&
+         (permission.resolution === undefined || ['approved', 'rejected', 'unknown'].includes(permission.resolution)))) &&
        ['firstObservedAt', 'lastActivityAt', 'stateChangedAt'].every(key => s[key] === undefined || validTimestamp(s[key])) &&
        (s.restored === undefined || typeof s.restored === 'boolean') &&
       (s.parentID === undefined || boundedString(s.parentID, 200)) && (s.todos === undefined || Array.isArray(s.todos) && s.todos.length <= 200 &&
@@ -231,7 +240,9 @@ export function createServer({ token, now = Date.now } = {}) {
               if (!session.parentID || sessionsById.has(session.id) || !timelineSessionIds.has(session.id) || !sessionsById.has(session.parentID)) continue;
               sessionsById.set(session.id, { ...session, status: 'idle', activity: undefined,
                 archived: true, ended: deletedAt.has(session.id) || Boolean(session.ended),
-                archivedAt: session.archivedAt ?? previous.lastSeen });
+                archivedAt: session.archivedAt ?? previous.lastSeen,
+                ...(session.permissions ? { permissions: session.permissions.map(permission => permission.status === 'pending'
+                  ? { ...permission, status: 'ended' } : permission) } : {}) });
               const endedAt = Date.parse(deletedAt.get(session.id));
               if (Number.isFinite(endedAt)) for (const interval of timeline?.intervals || []) {
                 if (interval.sessionId === session.id && interval.endAt === null && endedAt >= Date.parse(interval.startAt)) {

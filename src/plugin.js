@@ -9,9 +9,28 @@ import { createActivityBuffer } from './activity-events.js';
 import { buildExecutionTimeline } from './execution-timeline.js';
 const exec = promisify(execFile);
 
-const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics'];
+const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics', 'permissionDetails'];
 const MAX_USAGE_MESSAGES = 100;
 const USAGE_KEYS = [['input', 'input'], ['output', 'output'], ['reasoning', 'reasoning'], ['cacheRead', 'cache', 'read'], ['cacheWrite', 'cache', 'write']];
+const permissionTitles = {
+  read: 'Read files', write: 'Write files', edit: 'Edit files', bash: 'Run command', webfetch: 'Access web',
+  external_directory: 'Access external directory', doom_loop: 'Continue loop', task: 'Launch subtask',
+};
+function permissionType(value) {
+  if (typeof value !== 'string') return 'unknown';
+  const type = value.trim().toLowerCase().replace(/[ -]/g, '_');
+  return Object.hasOwn(permissionTitles, type) ? type : 'unknown';
+}
+function suppliedTimestamp(value) {
+  const date = Number.isFinite(value) ? new Date(value) : typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value) : undefined;
+  return date && Number.isFinite(date.getTime()) ? { timestamp: date.toISOString(), timestampSource: 'source' } : undefined;
+}
+function permissionResolution(value) {
+  const reply = typeof value === 'string' ? value.trim().toLowerCase() : value;
+  if (['once', 'always', 'allow', 'approved', 'granted'].includes(reply)) return 'approved';
+  if (['reject', 'deny', 'denied'].includes(reply)) return 'rejected';
+  return 'unknown';
+}
 function messageUsage(info) {
   const tokens = info.tokens;
   if (!tokens || typeof tokens !== 'object') return undefined;
@@ -99,6 +118,8 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
     if (privacy.modelMetrics && session.usage) result.usage = session.usage;
     if (session.retry) result.retry = session.retry;
     if (session.errorCategory) result.errorCategory = session.errorCategory;
+    if (privacy.permissionDetails && session.permissions?.length) result.permissions = session.permissions;
+    if (privacy.permissionDetails && session.permissions?.length) result.permissions = session.permissions;
     for (const key of ['firstObservedAt', 'lastActivityAt', 'stateChangedAt']) if (session[key] !== undefined) result[key] = session[key];
     if (session.restored) result.restored = true;
     return result;
@@ -109,6 +130,7 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
       const attributes = { ...result.attributes };
       if (!privacy.toolActivity) { delete attributes.toolName; delete result.toolCallId; delete result.messageId; }
       if (!privacy.modelMetrics) { delete attributes.providerId; delete attributes.modelId; }
+      if (!privacy.permissionDetails) { delete attributes.permissionType; delete attributes.permissionTitle; delete attributes.permissionId; }
       if (Object.keys(attributes).length) result.attributes = attributes;
       else delete result.attributes;
     } else if (!privacy.toolActivity) { delete result.toolCallId; delete result.messageId; }
@@ -231,6 +253,54 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   const recordObserved = (value, kind, context = {}, timestamp) => activityEvents.record(value.id, kind, timestamp, {
     parentSessionId: value.parentID, ...context,
   });
+  const updatePermissionRequest = (s, permission, updated = false) => {
+    const idValue = permission?.id || permission?.permissionID || permission?.permissionId;
+    const id = typeof idValue === 'string' && idValue.length <= 200 ? idValue : undefined;
+    const type = permissionType(permission?.type ?? permission?.permission);
+    const sourceTime = suppliedTimestamp(permission?.time?.created ?? permission?.createdAt ?? permission?.timestamp);
+    const requestedAt = sourceTime?.timestamp || new Date().toISOString();
+    const current = s.permissions || [];
+    let index = id ? current.findIndex(item => item.id === id) : -1;
+    if (index < 0 && (!id || updated)) {
+      const candidates = current.map((item, position) => ({ item, position })).filter(({ item }) => item.status === 'pending' && item.type === type && (!id || item.id === id));
+      if (candidates.length === 1) index = candidates[0].position;
+    }
+    const previous = index >= 0 ? current[index] : undefined;
+    const request = {
+      ...(id ? { id } : {}), type, title: permissionTitles[type] || 'Permission details unavailable',
+      requestedAt: previous?.requestedAt || requestedAt,
+      timestampSource: previous?.timestampSource || sourceTime?.timestampSource || 'observed',
+      status: 'pending',
+    };
+    if (previous && JSON.stringify(previous) === JSON.stringify(request)) return false;
+    const next = [...current];
+    if (index >= 0) next[index] = request;
+    else next.push(request);
+    s.permissions = next.slice(-50);
+    recordObserved(s, 'waiting', {
+      eventId: `permission:${s.id}:${id || type}:${type}:${request.requestedAt}:asked`,
+      attributes: { ...(id ? { permissionId: id } : {}), permissionType: type, permissionTitle: request.title },
+    }, request.requestedAt);
+    return true;
+  };
+  const resolvePermissionRequest = (s, permission) => {
+    const idValue = permission?.id || permission?.permissionID || permission?.permissionId;
+    const id = typeof idValue === 'string' && idValue.length <= 200 ? idValue : undefined;
+    const pending = (s.permissions || []).map((item, index) => ({ item, index })).filter(({ item }) => item.status === 'pending');
+    const match = id ? pending.find(({ item }) => item.id === id)
+      : pending.length === 1 ? pending[0] : undefined;
+    if (!match) return false;
+    const reply = permission?.reply ?? permission?.decision ?? permission?.response;
+    const resolution = permissionResolution(reply);
+    s.permissions = [...s.permissions];
+    s.permissions[match.index] = { ...match.item, status: 'responded', resolution };
+    recordObserved(s, 'permissionAnswered', {
+      eventId: `permission:${s.id}:${id || match.item.type}:${match.item.requestedAt}:replied:${resolution}`,
+      attributes: { ...(match.item.id ? { permissionId: match.item.id } : {}), permissionType: match.item.type,
+        permissionTitle: match.item.title },
+    });
+    return true;
+  };
   async function send() {
     if (stopped) return;
     if (sending) { dirty = true; return; }
@@ -332,8 +402,17 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           if (changed || categoryChanged) recordObserved(s, 'error', { attributes: { errorCategory: category }, eventId: `error:${s.id}:${category}` });
           s.errorCategory = category; delete s.retry; s.activity = 'Session error'; markActivity(s);
         }
-        if (event.type === 'permission.asked' || event.type === 'permission.updated') { if (markState(s, 'waiting')) recordObserved(s, 'waiting'); delete s.retry; delete s.errorCategory; s.activity = 'Waiting for permission'; markActivity(s); }
-        if (event.type === 'permission.replied') { if (markState(s, 'busy')) recordObserved(s, 'permissionAnswered'); delete s.retry; delete s.errorCategory; s.activity = 'Permission answered'; markActivity(s); }
+        if (event.type === 'permission.asked' || event.type === 'permission.updated') {
+          markState(s, 'waiting'); updatePermissionRequest(s, p); delete s.retry; delete s.errorCategory;
+          s.activity = 'Waiting for permission'; markActivity(s);
+        }
+        if (event.type === 'permission.replied') {
+          const matched = resolvePermissionRequest(s, p);
+          const pendingPermission = s.permissions?.some(permission => permission.status === 'pending');
+          if (!pendingPermission && markState(s, 'busy') && !matched) recordObserved(s, 'permissionAnswered');
+          delete s.retry; delete s.errorCategory;
+          s.activity = pendingPermission ? 'Waiting for permission' : 'Permission answered'; markActivity(s);
+        }
         if (event.type === 'todo.updated') { s.todos = p.todos?.map(t => ({ content: t.content, status: t.status })); markActivity(s); }
       }
       if (event.type === 'message.updated' && p.info?.sessionID) {
