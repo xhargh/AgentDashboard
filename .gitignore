@@ -3,5 +3,9 @@
 !.env.example
 node_modules/
 test-results/
+/dist/
+/build/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/schemas/
 
 .env-disabled
