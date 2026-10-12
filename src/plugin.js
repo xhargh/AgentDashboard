@@ -62,6 +62,7 @@ function updateUsage(session, info) {
   if (!session.latestUsage || timestamp >= session.latestUsage.timestamp) {
     const latest = session.usageMessages.get(messageId);
     session.latestUsage = { timestamp, input: latest.input, cacheRead: latest.cacheRead };
+    if (timestamp > 0 && Number.isFinite(timestamp)) session.contextEstimateAt = new Date(timestamp).toISOString();
     if (Number.isSafeInteger(session.model?.contextLimit)) {
       const occupied = [session.latestUsage.input, session.latestUsage.cacheRead].filter(Number.isSafeInteger);
       if (occupied.length) session.usage.contextEstimate = occupied.reduce((sum, value) => sum + value, 0);
@@ -123,6 +124,11 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
     if (privacy.tasks && session.todos) result.todos = session.todos;
     if (privacy.modelMetrics && session.model) result.model = session.model;
     if (privacy.modelMetrics && session.usage) result.usage = session.usage;
+    if (privacy.modelMetrics) {
+      if (session.lastCompactedAt) result.lastCompactedAt = session.lastCompactedAt;
+      if (session.contextEstimateAt) result.contextEstimateAt = session.contextEstimateAt;
+      if (session.compactionCount) result.compactionCount = session.compactionCount;
+    }
     if (session.retry) result.retry = session.retry;
     if (session.errorCategory) result.errorCategory = session.errorCategory;
     if (privacy.permissionDetails && session.permissions?.length) result.permissions = session.permissions;
@@ -132,7 +138,8 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
     return result;
   }) };
   if (events?.length) report.events = events.filter(event =>
-    (event.kind !== 'toolActivity' || privacy.toolActivity) && (event.kind !== 'modelSnapshot' || privacy.modelMetrics)).map(event => {
+    (event.kind !== 'toolActivity' || privacy.toolActivity) &&
+    (!['modelSnapshot', 'compaction'].includes(event.kind) || privacy.modelMetrics)).map(event => {
     const result = { ...event };
     if (result.attributes) {
       const attributes = { ...result.attributes };
@@ -431,6 +438,26 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           const changed = markState(s, 'error'), categoryChanged = category !== s.errorCategory;
           if (changed || categoryChanged) recordObserved(s, 'error', { attributes: { errorCategory: category }, eventId: `error:${s.id}:${category}` });
           s.errorCategory = category; delete s.retry; s.activity = 'Session error'; markActivity(s);
+        }
+        if (event.type === 'session.compacted') {
+          const observedAt = Date.now();
+          const sourceTime = suppliedTimestamp(p.time?.created ?? p.timestamp);
+          const sourceId = p.id || p.compactionID || p.compactionId;
+          const sourceKey = typeof sourceId === 'string' && sourceId.length <= 200 ? sourceId : sourceTime?.timestamp;
+          if (sourceKey) {
+            s.compactionEventIds ||= new Set();
+            if (s.compactionEventIds.has(sourceKey)) return;
+            s.compactionEventIds.add(sourceKey);
+            while (s.compactionEventIds.size > 1000) s.compactionEventIds.delete(s.compactionEventIds.values().next().value);
+          }
+          if (!sourceTime && Number.isFinite(s.lastCompactionObservedAt) && observedAt - s.lastCompactionObservedAt < 1000) return;
+          s.lastCompactionObservedAt = observedAt;
+          const timestamp = sourceTime?.timestamp || new Date(observedAt).toISOString();
+          if (!s.lastCompactedAt || Date.parse(timestamp) >= Date.parse(s.lastCompactedAt)) s.lastCompactedAt = timestamp;
+          s.compactionCount = Math.min(1_000_000, (s.compactionCount || 0) + 1);
+          recordObserved(s, 'compaction', { phase: 'model', timestampSource: sourceTime ? 'source' : 'observed',
+            eventId: typeof sourceId === 'string' && sourceId.length <= 200 ? `compaction:${s.id}:${sourceId}` : `compaction:${s.id}:${timestamp}` }, timestamp);
+          markActivity(s);
         }
         if (event.type === 'permission.asked' || event.type === 'permission.updated') {
           markState(s, 'waiting'); updatePermissionRequest(s, p); delete s.retry; delete s.errorCategory;

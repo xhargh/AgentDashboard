@@ -855,11 +855,15 @@ test('existing attention states do not notify on initial load or after reconnect
 test('execution timeline is collapsed, accessible, and retains state across polling', async ({ page }) => {
   await installStateFixture(page, () => {
     const state = report();
+    state.instances[0].sessions[0].lastCompactedAt = '2026-10-12T10:00:03Z';
+    state.instances[0].sessions[0].contextEstimateAt = '2026-10-12T09:58:00Z';
+    state.instances[0].sessions[0].compactionCount = 1;
     state.instances[0].events = [
       { schemaVersion: 1, id: 'call-start', instanceId: 'instance-alpha', sessionId: 'root-alpha', messageId: 'message-1', toolCallId: 'call-1', timestamp: '2026-10-12T10:00:01Z', timestampSource: 'source', kind: 'toolActivity', phase: 'tool', outcome: 'started', source: 'observed', summary: 'Tool activity', attributes: { toolName: 'bash' } },
       { schemaVersion: 1, id: 'call-finish', instanceId: 'instance-alpha', sessionId: 'root-alpha', messageId: 'message-1', toolCallId: 'call-1', timestamp: '2026-10-12T10:00:04Z', timestampSource: 'source', kind: 'toolActivity', phase: 'tool', outcome: 'completed', source: 'observed', summary: 'Tool activity', attributes: { toolName: 'bash' } },
       { schemaVersion: 1, id: 'call-running', instanceId: 'instance-alpha', sessionId: 'root-alpha', messageId: 'message-2', toolCallId: 'call-2', timestamp: '2026-10-12T10:00:05Z', timestampSource: 'observed', kind: 'toolActivity', phase: 'tool', outcome: 'started', source: 'observed', summary: 'Tool activity', attributes: { toolName: 'read' } },
       { schemaVersion: 1, id: 'call-error', instanceId: 'instance-alpha', sessionId: 'root-alpha', messageId: 'message-3', toolCallId: 'call-3', timestamp: '2026-10-12T10:00:06Z', timestampSource: 'source', kind: 'toolActivity', phase: 'tool', outcome: 'failure', source: 'observed', summary: 'Tool activity', attributes: { toolName: 'edit' } },
+      { schemaVersion: 1, id: 'compaction-1', instanceId: 'instance-alpha', sessionId: 'root-alpha', timestamp: '2026-10-12T10:00:03Z', timestampSource: 'source', kind: 'compaction', phase: 'model', source: 'observed', summary: 'Context compacted' },
     ];
     state.instances[0].timeline = { partial: true, intervals: [
       { sessionId: 'root-alpha', startAt: '2026-10-12T10:00:00Z', endAt: '2026-10-12T10:00:05Z', status: 'busy' },
@@ -875,6 +879,7 @@ test('execution timeline is collapsed, accessible, and retains state across poll
   await page.setViewportSize({ width: 375, height: 800 });
   const root = page.locator('.agent-tree').filter({ has: page.getByText('Build dashboard', { exact: true }) }).first();
   await root.locator('> summary').click();
+  await expect(root.locator('.compaction-context')).toContainText('post-compaction usage is pending');
   const toolDetails = root.locator('article.session-card > details.tool-spans');
   await expect(toolDetails.locator('> summary')).toContainText('Tool calls · 3 · 1 failed · 1 active · recorded 3.0 s · partial');
   await toolDetails.locator('> summary').click();
@@ -894,7 +899,8 @@ test('execution timeline is collapsed, accessible, and retains state across poll
   await expect(timeline.locator('.timeline-details')).not.toHaveAttribute('open', '');
   await expect(timeline.locator('ol')).toContainText('busy');
   await expect(timeline.locator('ol')).toContainText('waiting');
-  await expect(timeline.locator('.timeline-legend-item')).toHaveCount(7);
+  await expect(timeline.locator('.timeline-legend-item')).toHaveCount(8);
+  await expect(timeline.locator('.timeline-compaction-marker')).toHaveCount(1);
   await expect(timeline.locator('.timeline-row').first().locator('.timeline-interval')).toHaveCount(1);
   await expect(timeline.locator('.timeline-session').filter({ hasText: 'Archived child · ended' })).toHaveCount(1);
   await expect(timeline.locator('.timeline-unknown').first()).toHaveText('Unknown · partial history');

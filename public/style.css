@@ -168,6 +168,8 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
 .timeline-session { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
 .timeline-track { position: relative; height: 20px; border-bottom: 1px solid var(--line); }
 .timeline-now { position: absolute; z-index: 1; top: 0; height: 20px; border-left: 1px dashed var(--text); }
+.timeline-compaction-marker { position: absolute; z-index: 1; top: 0; height: 20px; border-left: 2px dotted #c19be8; }
+.timeline-compaction-swatch { display: inline-block; width: 2px; height: 10px; border-left: 2px dotted #c19be8; }
 .timeline-interval { position: absolute; top: 2px; min-width: 4px; height: 14px; overflow: hidden; border-radius: 3px; color: #101413; text-align: center; font-size: 9px; line-height: 14px; }
 .timeline-busy { background: #79c99b; }
 .timeline-idle { background: #8293a0; }
@@ -195,6 +197,7 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
 .model-history { padding: 10px 24px; border-top: 1px solid var(--line); }
 .model-history-summary { width: fit-content; color: var(--muted); font-size: 11px; cursor: pointer; }
 .model-history-list { margin: 7px 0; padding-left: 20px; color: var(--text); font-size: 11px; }
+.compaction-context { margin-top: 7px; color: var(--muted); font-size: 10px; }
 .timeline-list { margin: 8px 0; padding-left: 24px; color: var(--muted); font-size: 11px; }
 .timeline-list li { padding: 2px 0; }
 .execution-timeline:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }

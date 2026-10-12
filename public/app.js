@@ -69,6 +69,7 @@ const eventKinds = {
   waiting: ['Permission requested', 'activity-permission'], error: ['Error', 'activity-error'], retry: ['Retrying', 'activity-work'],
   permissionAnswered: ['Permission answered', 'activity-permission'], deleted: ['Session ended', 'activity-complete'],
   toolActivity: ['Tool activity', 'activity-work'], fileChange: ['File change', 'activity-work'],
+  compaction: ['Context compacted', 'activity-complete'],
 };
 function activityEvents(instance, sessionId) {
   return (Array.isArray(instance.events) ? instance.events : [])
@@ -196,13 +197,16 @@ function renderExecutionTimeline(instance, parent) {
   const intervals = Array.isArray(intervalList) ? intervalList : [];
   const descendants = descendantSessions(parent, instance.sessions);
   const rows = [parent, ...descendants].map(session => ({ session, intervals: intervals.filter(item => item.sessionId === session.id) }));
+  const compactions = rows.map(row => ({ ...row, events: (Array.isArray(instance.events) ? instance.events : []).filter(event =>
+    event?.sessionId === row.session.id && event.kind === 'compaction' && Number.isFinite(Date.parse(event.timestamp))) }));
   const intervalEnd = (item, session) => item.endAt ? Date.parse(item.endAt)
     : session.archived ? (session.archivedAt || Date.parse(item.startAt))
       : instance.online ? Date.now() : (instance.lastSeen || Date.parse(item.startAt));
   const relevant = rows.flatMap(row => row.intervals.filter((item, index, list) =>
     !(item.status === 'idle' && index === list.length - 1 && item.endAt === null)));
   details.append(el('summary', 'Execution timeline', 'execution-heading'));
-  if (!relevant.length) {
+  const observedCompactions = compactions.flatMap(row => row.events);
+  if (!relevant.length && !observedCompactions.length) {
     const message = !instance.timeline
       ? 'Timeline unavailable: this report does not include timeline history.'
       : instance.timeline.partial
@@ -212,8 +216,11 @@ function renderExecutionTimeline(instance, parent) {
     return details;
   }
   const relevantSet = new Set(relevant);
-  const times = rows.flatMap(row => row.intervals.filter(item => relevantSet.has(item))
-    .flatMap(item => [Date.parse(item.startAt), intervalEnd(item, row.session)])).filter(Number.isFinite);
+  const times = [
+    ...rows.flatMap(row => row.intervals.filter(item => relevantSet.has(item))
+      .flatMap(item => [Date.parse(item.startAt), intervalEnd(item, row.session)])),
+    ...observedCompactions.map(event => Date.parse(event.timestamp)),
+  ].filter(Number.isFinite);
   const min = Math.min(...times), max = Math.max(...times), span = Math.max(1, max - min);
   const chart = el('div', undefined, 'timeline-chart'); chart.setAttribute('role', 'img');
   chart.setAttribute('aria-label', 'Observed session states on a shared wall-clock time scale');
@@ -253,6 +260,14 @@ function renderExecutionTimeline(instance, parent) {
       block.title = `${item.status} · ${formatTimestamp(item.startAt)}${endLabel}`;
       track.append(block);
     }
+    for (const event of compactions.find(item => item.session.id === row.session.id)?.events || []) {
+      const marker = el('span', undefined, 'timeline-compaction-marker');
+      marker.setAttribute('aria-label', `Context compacted at ${formatTimestamp(event.timestamp)}`);
+      marker.title = `Context compacted · ${formatTimestamp(event.timestamp)}`;
+      marker.dataset.time = String(Date.parse(event.timestamp));
+      marker.style.left = `${Math.max(0, (Date.parse(event.timestamp) - min) / span * 100)}%`;
+      track.append(marker);
+    }
     line.append(track); chart.append(line);
   }
   if (relevant.some(item => !item.endAt) && (instance.online || Number.isFinite(instance.lastSeen))) {
@@ -280,12 +295,16 @@ function renderExecutionTimeline(instance, parent) {
     const item = el('span', undefined, 'timeline-legend-item');
     item.append(el('span', undefined, `timeline-swatch timeline-${state}`), el('span', label)); legend.append(item);
   }
+  const compactionLegend = el('span', undefined, 'timeline-legend-item');
+  compactionLegend.append(el('span', undefined, 'timeline-compaction-swatch'), el('span', 'Compaction'));
+  legend.append(compactionLegend);
   const disclosure = el('details', undefined, 'timeline-details');
   disclosure.append(el('summary', 'Show interval details'), list);
   details.append(legend, disclosure);
   details.append(el('p', instance.timeline?.partial
     ? `Partial history: earlier transitions may be missing or truncated; earliest known event ${formatTimestamp(min)}.`
-    : 'Intervals show observed event times; they do not represent compute time.', 'timeline-message'));
+    : !relevant.length ? 'Compaction markers show observed events; state intervals are unavailable.'
+      : 'Intervals show observed event times; they do not represent compute time.', 'timeline-message'));
   function applyRange(active) {
     let from = Number(rangeStart.value), to = Number(rangeEnd.value);
     if (from >= to) {
@@ -308,6 +327,11 @@ function renderExecutionTimeline(instance, parent) {
       }
       const marker = track.querySelector('.timeline-now');
       if (marker) marker.style.left = `${Math.min(100, Math.max(0, (Number(marker.dataset.time) - visibleStart) / visibleSpan * 100))}%`;
+      for (const marker of track.querySelectorAll('.timeline-compaction-marker')) {
+        const time = Number(marker.dataset.time);
+        marker.hidden = time < visibleStart || time > visibleEnd;
+        marker.style.left = `${Math.min(100, Math.max(0, (time - visibleStart) / visibleSpan * 100))}%`;
+      }
     }
   }
   rangeStart.addEventListener('input', () => applyRange(rangeStart));
@@ -336,6 +360,15 @@ function renderMetrics(info, session, online, sessions) {
     else if (percentage >= 75) context.append(el('strong', 'Context estimate is at least 75%', 'context-warning-text'));
     metrics.append(context);
   } else metrics.append(el('p', 'Context unavailable', 'context-unavailable'));
+  if (session.lastCompactedAt) {
+    const estimateAt = Date.parse(session.contextEstimateAt), compactedAt = Date.parse(session.lastCompactedAt);
+    const note = Number.isFinite(estimateAt) && compactedAt > estimateAt
+      ? `Compaction observed at ${formatTimestamp(session.lastCompactedAt)} after the latest context estimate; post-compaction usage is pending. Savings are not measured.`
+      : Number.isFinite(estimateAt)
+        ? `Compaction observed at ${formatTimestamp(session.lastCompactedAt)}; latest estimate is from ${formatTimestamp(session.contextEstimateAt)}. Savings are not measured.`
+        : `Compaction observed at ${formatTimestamp(session.lastCompactedAt)}; context estimate unavailable.`;
+    metrics.append(el('p', note, 'compaction-context'));
+  }
   if (!usage) metrics.append(el('p', 'Usage pending', 'usage-pending'));
   else {
     const lifetime = el('div', undefined, 'usage-metric');

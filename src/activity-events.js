@@ -7,11 +7,11 @@ const summaries = {
   created: 'Session created', busy: 'Agent started working', idle: 'Agent became idle',
   waiting: 'Permission requested', error: 'Agent encountered an error', retry: 'Agent retrying',
   permissionAnswered: 'Permission answered', deleted: 'Session ended', toolActivity: 'Tool activity', fileChange: 'File change',
-  modelSnapshot: 'Model observation',
+  modelSnapshot: 'Model observation', compaction: 'Context compacted',
 };
 const phases = {
   created: 'lifecycle', busy: 'working', idle: 'idle', waiting: 'permission',
-  error: 'error', retry: 'retry', permissionAnswered: 'permission', deleted: 'lifecycle', toolActivity: 'tool', fileChange: 'files', modelSnapshot: 'model',
+  error: 'error', retry: 'retry', permissionAnswered: 'permission', deleted: 'lifecycle', toolActivity: 'tool', fileChange: 'files', modelSnapshot: 'model', compaction: 'model',
 };
 const outcomes = { error: 'failure', deleted: 'completed' };
 const safeAttributeKeys = new Set(['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'variant', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory', 'fileKey', 'path', 'additions', 'deletions', 'changeType', 'snapshotId']);

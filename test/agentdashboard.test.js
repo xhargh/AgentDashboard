@@ -505,6 +505,9 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   const toolPart = { sessionID: 'child', messageID: 'message-1', id: 'part-1', callID: 'call-1', type: 'tool', tool: 'bash', state: { status: 'running', time: { start: toolStartedAt }, input: { command: 'secret-value' } } };
   await emit('message.part.updated', { part: toolPart });
   await emit('message.part.updated', { part: toolPart });
+  const compactedAt = new Date(Date.now() - 1000).toISOString();
+  await emit('session.compacted', { sessionID: 'child', time: { created: compactedAt }, content: 'PRIVATE_COMPACTION_TEXT' });
+  await emit('session.compacted', { sessionID: 'child', time: { created: compactedAt }, content: 'PRIVATE_COMPACTION_TEXT' });
   const diff = [{ path: `${dir}/file.txt`, additions: 3, deletions: 1, patch: 'PRIVATE_SOURCE_HUNK' }];
   await emit('session.diff', { sessionID: 'child', diff });
   await emit('session.diff', { sessionID: 'child', diff });
@@ -534,12 +537,15 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   assert.equal(toolEvents[0].timestampSource, 'source');
   assert.equal(toolEvents[0].attributes.toolName, 'bash');
   assert.equal(toolEvents[0].attributes.toolStatus, 'running');
+  assert.equal(waiting.sessions.find(s => s.id === 'child').compactionCount, 1);
+  assert.equal(waiting.sessions.find(s => s.id === 'child').lastCompactedAt, compactedAt);
+  assert.equal(waiting.events.filter(event => event.sessionId === 'child' && event.kind === 'compaction').length, 1);
   const fileEvents = waiting.events.filter(event => event.kind === 'fileChange' && event.attributes.fileKey !== '__snapshot__');
   assert.equal(fileEvents.length, 1, 'repeated full diff snapshots do not double-count a file');
   assert.equal(fileEvents[0].attributes.additions, 3);
   assert.equal(fileEvents[0].attributes.deletions, 1);
   assert.equal(fileEvents[0].attributes.path, `${dir}/file.txt`);
-  assert.doesNotMatch(JSON.stringify(waiting), /PRIVATE_COMMAND_TITLE|\/private\/path|secret prompt|secret-value|PRIVATE_SOURCE_HUNK/);
+  assert.doesNotMatch(JSON.stringify(waiting), /PRIVATE_COMMAND_TITLE|\/private\/path|secret prompt|secret-value|PRIVATE_SOURCE_HUNK|PRIVATE_COMPACTION_TEXT/);
   await emit('permission.replied', { sessionID: 'child', id: 'permission-1', reply: 'reject', title: 'SECRET_REPLY_TITLE' });
   const permissionPartiallyAnswered = await waitFor(i => i?.sessions.find(s => s.id === 'child')?.permissions?.[0]?.status === 'responded');
   assert.equal(permissionPartiallyAnswered.sessions.find(s => s.id === 'child').status, 'waiting', 'one reply does not clear another outstanding permission');
@@ -671,6 +677,7 @@ test('status-only telemetry strips metadata before transmission and validates se
     sessionID: 'session', id: 'status-only-permission', type: 'bash', title: 'PRIVATE_TITLE', pattern: 'PRIVATE_COMMAND',
   } } });
   await plugin.event({ event: { type: 'session.status', properties: { sessionID: 'session', status: { type: 'busy' } } } });
+  await plugin.event({ event: { type: 'session.compacted', properties: { sessionID: 'session', content: 'PRIVATE_COMPACTION_TEXT' } } });
   await plugin.event({ event: { type: 'message.updated', properties: { info: { sessionID: 'session', role: 'assistant', id: 'message',
     providerID: 'private-provider', modelID: 'private-model', variant: 'private-variant', tokens: { input: 12, output: 3 } } } } });
   for (let n = 0; n < 100 && (!sent?.sessions?.length || sent.sessions[0].status !== 'busy' || sent.timeline?.intervals.length < 2); n++) {
@@ -683,9 +690,11 @@ test('status-only telemetry strips metadata before transmission and validates se
   assert.equal(sent.sessions[0].model, undefined);
   assert.equal(sent.sessions[0].usage, undefined);
   assert.equal(sent.sessions[0].permissions, undefined);
+  assert.equal(sent.sessions[0].lastCompactedAt, undefined);
+  assert.ok(!sent.events?.some(event => event.kind === 'compaction'));
   assert.ok(!sent.events?.some(event => event.attributes?.permissionId));
   assert.deepEqual(sent.events?.map(event => event.kind), ['created', 'waiting', 'busy']);
-  assert.doesNotMatch(JSON.stringify(sent), /PRIVATE_TITLE|PRIVATE_COMMAND/);
+  assert.doesNotMatch(JSON.stringify(sent), /PRIVATE_TITLE|PRIVATE_COMMAND|PRIVATE_COMPACTION_TEXT/);
   assert.deepEqual(sent.timeline.intervals.map(({ sessionId, status }) => [sessionId, status]), [['session', 'waiting']]);
   assert.equal(sent.timeline.partial, true, 'same-millisecond transitions remain explicitly partial instead of receiving fabricated timestamps');
   assert.doesNotMatch(JSON.stringify(sent.timeline), /Secret title|private\/project|private-provider|private-model/);
