@@ -122,7 +122,7 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(root.locator(':scope > summary .tree-title')).toHaveText('Build dashboard');
   await expect(root.locator(':scope > summary .badge')).toHaveText('busy');
   await root.locator(':scope > summary').click();
-  await root.locator(':scope > .subagent-group > summary').click();
+  await root.locator(':scope > article.session-card > .subagent-group > summary').click();
   await expect(root.locator('.session-info > p.muted').first()).toHaveText('Computer alpha · OpenCode instance PID 2101');
   await expect(root.locator(':scope > summary .tree-directory')).toHaveAttribute('aria-label', 'Working directory: /work/alpha/app');
   await expect(page.getByText('Finished review', { exact: true })).toBeVisible();
@@ -181,7 +181,7 @@ test('leaf subagents can be folded and unfolded like parent sessions', async ({ 
   await page.goto('/');
   const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
   await root.locator(':scope > summary').click();
-  await root.locator(':scope > .subagent-group > summary').click();
+  await root.locator(':scope > article.session-card > .subagent-group > summary').click();
   const child = page.locator('details[data-agent-key="instance-alpha:child-alpha"]');
   await child.locator(':scope > summary').click();
   await expect(child).toHaveAttribute('open', '');
@@ -315,9 +315,9 @@ test('agent summary keeps status and activity visible when expanded without repe
   await expect(tree).toHaveAttribute('open', '');
   await expect(summary.locator('.badge')).toHaveText('busy');
   await expect(tree.locator(':scope > summary .badge')).toHaveCount(1);
-  await expect(tree.locator(':scope > article.session-card .badge')).toHaveCount(0);
-  await expect(tree.locator(':scope > article.session-card .activity')).toHaveCount(0);
-  await expect(tree.locator(':scope > article.session-card .session-info > strong')).toHaveCount(0);
+  await expect(tree.locator(':scope > article.session-card > .session > .session-state .badge')).toHaveCount(0);
+  await expect(tree.locator(':scope > article.session-card > .activity-timeline')).toHaveCount(1);
+  await expect(tree.locator(':scope > article.session-card > .session .session-info > strong')).toHaveCount(0);
 });
 
 test('session sorting supports name, context, cumulative usage, direction, and survives refreshes', async ({ page }) => {
@@ -400,29 +400,31 @@ test('shows independent model, context, and token metrics and updates after comp
   const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
   await root.locator(':scope > summary').click();
   const rootCard = root.locator(':scope > article.session-card');
-  await expect(rootCard.locator('.model-label')).toHaveText('Provider A / Friendly A');
-  await expect(rootCard.locator('.variant-label')).toHaveText('high variant');
-  await expect(rootCard.locator('.context-metric')).toContainText('150,000 / 200,000 (75%)');
-  await expect(rootCard.locator('.context-warning-text')).toHaveText('Context estimate is at least 75%');
-  await expect(rootCard.locator('progress')).toHaveAttribute('aria-valuetext', '75 percent estimated');
-  await expect(rootCard.locator('.usage-metric')).toContainText('Own · 150,000 input + output tokens');
-  await expect(rootCard.locator('.aggregate-usage')).toHaveText('Total with subagents · 150,012 input + output tokens · some usage pending');
-  await rootCard.locator('.usage-breakdown summary').click();
-  await expect(rootCard.locator('.usage-breakdown')).toContainText('Reasoning');
-  await expect(rootCard.locator('.usage-breakdown')).toContainText('1,200');
+  const rootInfo = rootCard.locator(':scope > .session > .session-info');
+  await expect(rootInfo.locator('.model-label')).toHaveText('Provider A / Friendly A');
+  await expect(rootInfo.locator('.variant-label')).toHaveText('high variant');
+  await expect(rootInfo.locator('.context-metric')).toContainText('150,000 / 200,000 (75%)');
+  await expect(rootInfo.locator('.context-warning-text')).toHaveText('Context estimate is at least 75%');
+  await expect(rootInfo.locator('progress')).toHaveAttribute('aria-valuetext', '75 percent estimated');
+  await expect(rootInfo.locator('.usage-metric')).toContainText('Own · 150,000 input + output tokens');
+  await expect(rootInfo.locator('.aggregate-usage')).toHaveText('Total with subagents · 150,012 input + output tokens · some usage pending');
+  await rootInfo.locator('.usage-breakdown summary').click();
+  await expect(rootInfo.locator('.usage-breakdown')).toContainText('Reasoning');
+  await expect(rootInfo.locator('.usage-breakdown')).toContainText('1,200');
 
   const child = page.locator('[data-agent-key="instance-alpha:child-alpha"]');
   const childCard = child.locator(':scope > article.session-card');
-  await expect(childCard.locator('.model-label')).toHaveText('Provider B / model-b');
-  await expect(childCard.locator('.variant-label')).toHaveCount(0);
+  const childInfo = childCard.locator(':scope > .session > .session-info');
+  await expect(childInfo.locator('.model-label')).toHaveText('Provider B / model-b');
+  await expect(childInfo.locator('.variant-label')).toHaveCount(0);
   await expect(child.locator(':scope > summary .badge')).toHaveCount(1);
   await expect(childCard.locator('.badge')).toHaveCount(0);
-  await expect(childCard.locator('.context-warning-text')).toHaveText('Context estimate is at least 90%');
-  await expect(childCard.locator('.usage-metric')).toContainText('Own · 12 input + output tokens');
+  await expect(childInfo.locator('.context-warning-text')).toHaveText('Context estimate is at least 90%');
+  await expect(childInfo.locator('.usage-metric')).toContainText('Own · 12 input + output tokens');
 
-  await expect(rootCard.locator('.context-metric')).toContainText('25,000 / 200,000 (13%)');
-  await expect(rootCard.locator('.context-warning-text')).toHaveCount(0);
-  await expect(rootCard.locator('.usage-breakdown')).toHaveAttribute('open', '');
+  await expect(rootInfo.locator('.context-metric')).toContainText('25,000 / 200,000 (13%)');
+  await expect(rootInfo.locator('.context-warning-text')).toHaveCount(0);
+  await expect(rootInfo.locator('.usage-breakdown')).toHaveAttribute('open', '');
 });
 
 test('unknown and privacy-limited metrics render placeholders without fabricated zeros', async ({ page }) => {
@@ -460,8 +462,8 @@ test('shows one accessible working directory and status, without idle activity d
   await expect(rootPath).toHaveAttribute('title', root.directory);
   await expect(rootPath).toHaveAttribute('aria-label', `Working directory: ${root.directory}`);
   await rootTree.locator(':scope > summary').click();
-  await expect(rootTree.locator(':scope > article .tree-directory, :scope > article code')).toHaveCount(0);
-  await expect(rootTree.locator(':scope > article .activity')).toHaveCount(0);
+  await expect(rootTree.locator(':scope > article.session-card > .session .tree-directory, :scope > article.session-card > .session code')).toHaveCount(0);
+  await expect(rootTree.locator(':scope > article.session-card > .activity-timeline')).toHaveCount(1);
 
   const childTree = page.locator('[data-agent-key="instance-alpha:child-alpha"]');
   await expect(childTree.locator(':scope > summary .badge')).toHaveCount(1);
@@ -556,7 +558,7 @@ test('renders nested agents, preserves expansion, surfaces descendant attention,
   await expect(root.locator(':scope > summary')).toContainText('Attention in this branch');
   await root.locator(':scope > summary').focus();
   await page.keyboard.press('Enter');
-  await root.locator(':scope > .subagent-group > summary').click();
+  await root.locator(':scope > article.session-card > .subagent-group > summary').click();
   const child = page.locator('details[data-agent-key="instance-alpha:child-alpha"]');
   await child.locator(':scope > summary').focus();
   await page.keyboard.press('Enter');
@@ -585,7 +587,7 @@ test('groups eligible descendants once, preserves child expansion through polls 
   await page.goto('/');
   const root = page.locator('details[data-agent-key="instance-alpha:root-alpha"]');
   await root.locator(':scope > summary').click();
-  const group = root.locator(':scope > .subagent-group');
+  const group = root.locator(':scope > article.session-card > .subagent-group');
   await expect(group.locator(':scope > summary')).toContainText('Subagents · 4');
   await expect(group.locator(':scope > summary')).toContainText('need attention');
   await expect(group.locator('details.subagent-row')).toHaveCount(4);
@@ -629,7 +631,7 @@ test('searches todo content through nested sessions while preserving ancestor co
   await expect(root.locator(':scope > summary')).toContainText('Build dashboard');
   await expect(page.getByText('Implement details', { exact: true })).toBeHidden();
   await root.locator(':scope > summary').click();
-  await root.locator(':scope > .subagent-group > summary').click();
+  await root.locator(':scope > article.session-card > .subagent-group > summary').click();
   const task = page.locator('[data-agent-key="instance-alpha:task-child"]');
   await task.locator(':scope > summary').click();
   await expect(page.getByText('Implement details', { exact: true })).toBeVisible();
@@ -658,8 +660,8 @@ test('shows sanitized chronological per-agent activity and preserves expansion a
   await page.goto('/');
   const root = page.locator('details.agent-tree[data-agent-key="instance-alpha:root-alpha"]');
   await root.locator(':scope > summary.agent-tree-summary').click();
-  await root.locator(':scope > .subagent-group > summary').click();
-  const timeline = root.locator(':scope > article.session-card details.activity-timeline');
+  await root.locator(':scope > article.session-card > .subagent-group > summary').click();
+  const timeline = root.locator(':scope > article.session-card > details.activity-timeline');
   await expect(timeline).toContainText('Recent activity · 3');
   await timeline.locator('summary').click();
   await expect(timeline.locator('.activity-kind')).toHaveText(['Working', 'Permission requested', 'Error']);
@@ -679,10 +681,10 @@ test('shows a compact empty activity state for agents without event history', as
   await page.goto('/');
   const root = page.locator('details.agent-tree[data-agent-key="instance-alpha:root-alpha"]');
   await root.locator(':scope > summary.agent-tree-summary').click();
-  await root.locator(':scope > .subagent-group > summary').click();
+  await root.locator(':scope > article.session-card > .subagent-group > summary').click();
   const child = root.locator('[data-agent-key="instance-alpha:child-alpha"]');
   await child.locator(':scope > summary').click();
-  const timeline = child.locator(':scope > article.session-card details.activity-timeline');
+  const timeline = child.locator(':scope > article.session-card > details.activity-timeline');
   await timeline.locator('summary').click();
   await expect(timeline).toContainText('No recent activity reported.');
 });
@@ -745,6 +747,7 @@ test('execution timeline is collapsed, accessible, and retains state across poll
     const state = report();
     state.instances[0].timeline = { partial: true, intervals: [
       { sessionId: 'root-alpha', startAt: '2026-10-12T10:00:00Z', endAt: '2026-10-12T10:00:05Z', status: 'busy' },
+      { sessionId: 'root-alpha', startAt: '2026-10-12T10:00:05Z', endAt: null, status: 'idle' },
       { sessionId: 'child-alpha', startAt: '2026-10-12T10:00:02Z', endAt: null, status: 'waiting' },
     ] };
     state.instances[0].sessions.push({ id: 'unknown-child', parentID: 'root-alpha', title: 'Unknown child', status: 'idle' });
@@ -760,14 +763,18 @@ test('execution timeline is collapsed, accessible, and retains state across poll
   await expect(timeline).not.toHaveAttribute('open', '');
   await timeline.locator('> summary').click();
   await expect(timeline).toHaveAttribute('open', '');
+  await expect(timeline.locator('.timeline-details')).not.toHaveAttribute('open', '');
   await expect(timeline.locator('ol')).toContainText('busy');
   await expect(timeline.locator('ol')).toContainText('waiting');
+  await expect(timeline.locator('.timeline-legend-item')).toHaveCount(7);
+  await expect(timeline.locator('.timeline-row').first().locator('.timeline-interval')).toHaveCount(1);
   await expect(timeline.locator('.timeline-unknown').first()).toHaveText('Unknown · partial history');
   await expect(timeline).toContainText('Partial history');
   await expect(timeline.locator('.timeline-chart')).toHaveAttribute('role', 'img');
   expect(await timeline.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(true);
-  expect(await root.locator('.execution-timeline').evaluate(node => [...node.parentElement.children].indexOf(node)))
-    .toBeLessThan(await root.locator('.subagent-group').evaluate(node => [...node.parentElement.children].indexOf(node)));
+  expect(await timeline.evaluate(node => node.parentElement.classList.contains('session-card'))).toBe(true);
+  await timeline.locator('.timeline-details > summary').click();
+  await expect(timeline.locator('.timeline-details')).toHaveAttribute('open', '');
   await timeline.locator('> summary').click();
   await expect(timeline).not.toHaveAttribute('open', '');
   await page.waitForTimeout(2500);
