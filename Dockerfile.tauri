@@ -1,4 +1,8 @@
+# syntax=docker/dockerfile:1.7
 FROM rust:1.90-bookworm AS build
+
+ENV CARGO_HOME=/usr/local/cargo \
+    CARGO_TARGET_DIR=/cargo-target
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl file libayatana-appindicator3-dev librsvg2-dev \
@@ -8,9 +12,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src/desktop/src-tauri
 COPY desktop/src-tauri ./
 COPY public /src/public
-RUN cargo install tauri-cli --version '=2.12.2' --locked
-RUN cargo tauri build --no-bundle -- --locked \
-    && install -D target/release/agent-dashboard /out/AgentDashboard
+RUN --mount=type=cache,id=agentdashboard-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=agentdashboard-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=agentdashboard-cargo-install,target=/usr/local/cargo-install \
+    cargo install tauri-cli --version '=2.12.2' --locked --root /usr/local/cargo-install
+RUN --mount=type=cache,id=agentdashboard-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=agentdashboard-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=agentdashboard-cargo-install,target=/usr/local/cargo-install \
+    --mount=type=cache,id=agentdashboard-tauri-target,target=/cargo-target \
+    PATH="/usr/local/cargo-install/bin:$PATH" cargo tauri build --no-bundle -- --locked \
+    && install -D /cargo-target/release/agent-dashboard /out/AgentDashboard
 
 FROM scratch AS artifact
 COPY --from=build /out/AgentDashboard /AgentDashboard
