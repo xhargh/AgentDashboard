@@ -751,6 +751,25 @@ function render() {
         if (health.status === 'unavailable') healthDetails.append(el('p', 'The MCP status query failed; agent execution was not interrupted.', 'timeline-message'));
         healthDetails.append(list); card.append(healthDetails);
       }
+      if (!s.parentID && s.id === workspaceRootId && i.lspHealth) {
+        const health = i.lspHealth, lsp = health.lsp || {}, formatter = health.formatter || {}, diagnostics = health.diagnostics;
+        const lspServers = Array.isArray(lsp.servers) ? lsp.servers : [], formatters = Array.isArray(formatter.formatters) ? formatter.formatters : [];
+        const healthDetails = el('details', undefined, 'lsp-health');
+        const lspSummary = lsp.status === 'unsupported' ? 'LSP unavailable in this SDK'
+          : lsp.status === 'unavailable' ? 'LSP status temporarily unavailable'
+            : `LSP · ${lspServers.filter(server => server.state === 'connected').length} connected · ${lspServers.filter(server => server.state === 'failed').length} failed`;
+        const formatterSummary = formatter.status === 'unsupported' || formatter.status === 'unavailable'
+          ? 'formatter status unavailable' : `${formatters.filter(item => item.state === 'available').length} formatters available`;
+        const diagnosticSummary = !diagnostics?.available ? 'diagnostics unavailable'
+          : `${diagnostics.errors + diagnostics.warnings + diagnostics.information + diagnostics.hints} diagnostics${diagnostics.partial ? ' · partial' : ''}`;
+        healthDetails.append(el('summary', `Workspace health · ${lspSummary} · ${formatterSummary} · ${diagnosticSummary}`, 'lsp-health-summary'));
+        const list = el('ul', undefined, 'lsp-health-list');
+        for (const server of lspServers) list.append(el('li', `LSP ${server.name} · ${server.state}${server.lastTransitionAt ? ` · last observed ${formatTimestamp(server.lastTransitionAt)}` : ''}`));
+        for (const item of formatters) list.append(el('li', `Formatter ${item.name} · ${item.state}`));
+        if (diagnostics?.available) list.append(el('li', `Diagnostics · ${diagnostics.errors} errors · ${diagnostics.warnings} warnings · ${diagnostics.information} information · ${diagnostics.hints} hints`));
+        if (lsp.status === 'unavailable' || formatter.status === 'unavailable') healthDetails.append(el('p', 'An environment status query failed; agent execution was not interrupted.', 'timeline-message'));
+        healthDetails.append(list); card.append(healthDetails);
+      }
       if (!compact) card.append(renderExecutionTimeline(i, s));
       if (!compact && children.length) {
         const descendants = descendantSessions(s, i.sessions);
