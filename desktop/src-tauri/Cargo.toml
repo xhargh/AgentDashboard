@@ -9,3 +9,4 @@ tauri-build = { version = "=2.7.2", features = [] }
 
 [dependencies]
 tauri = { version = "=2.12.3", features = ["tray-icon"] }
+tauri-plugin-notification = "2"
