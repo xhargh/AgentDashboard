@@ -40,6 +40,7 @@ test('large nested fleet reuses keyed DOM and preserves interaction state throug
     body: JSON.stringify(syntheticFleet(revision++)),
   }));
   await page.goto('/');
+  await page.locator('.session-group').first().locator(':scope > summary').click();
   const root = page.locator('[data-agent-key="perf-0:agent-0"]');
   await expect(root).toBeVisible();
   await root.locator(':scope > summary.agent-tree-summary').click();
@@ -100,6 +101,7 @@ test('renders a shared timeline with hundreds of descendant lanes', async ({ pag
     }] }),
   }));
   await page.goto('/');
+  await page.locator('.session-group').first().locator(':scope > summary').click();
   const root = page.locator('[data-agent-key="many-lanes:lane-0"]');
   await root.locator(':scope > summary').click();
   const timeline = root.locator('.execution-timeline');
