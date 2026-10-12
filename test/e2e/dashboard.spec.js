@@ -749,8 +749,10 @@ test('execution timeline is collapsed, accessible, and retains state across poll
       { sessionId: 'root-alpha', startAt: '2026-10-12T10:00:00Z', endAt: '2026-10-12T10:00:05Z', status: 'busy' },
       { sessionId: 'root-alpha', startAt: '2026-10-12T10:00:05Z', endAt: null, status: 'idle' },
       { sessionId: 'child-alpha', startAt: '2026-10-12T10:00:02Z', endAt: null, status: 'waiting' },
+      { sessionId: 'archived-child', startAt: '2026-10-12T10:00:01Z', endAt: '2026-10-12T10:00:04Z', status: 'busy' },
     ] };
     state.instances[0].sessions.push({ id: 'unknown-child', parentID: 'root-alpha', title: 'Unknown child', status: 'idle' });
+    state.instances[0].sessions.push({ id: 'archived-child', parentID: 'root-alpha', title: 'Archived child', status: 'idle', archived: true, ended: true });
     return state;
   });
   await page.goto('/');
@@ -768,11 +770,18 @@ test('execution timeline is collapsed, accessible, and retains state across poll
   await expect(timeline.locator('ol')).toContainText('waiting');
   await expect(timeline.locator('.timeline-legend-item')).toHaveCount(7);
   await expect(timeline.locator('.timeline-row').first().locator('.timeline-interval')).toHaveCount(1);
+  await expect(timeline.locator('.timeline-session').filter({ hasText: 'Archived child · ended' })).toHaveCount(1);
   await expect(timeline.locator('.timeline-unknown').first()).toHaveText('Unknown · partial history');
   await expect(timeline).toContainText('Partial history');
   await expect(timeline.locator('.timeline-chart')).toHaveAttribute('role', 'img');
   expect(await timeline.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(true);
   expect(await timeline.evaluate(node => node.parentElement.classList.contains('session-card'))).toBe(true);
+  await expect(timeline.getByRole('slider', { name: 'Timeline range start' })).toHaveCount(1);
+  const rangeStart = timeline.locator('input[aria-label="Timeline range start"]');
+  await rangeStart.focus();
+  await page.keyboard.press('End');
+  await expect(rangeStart).toHaveValue('999');
+  await expect(timeline.locator('.timeline-axis span').first()).not.toHaveText('2026-10-12 10:00');
   await timeline.locator('.timeline-details > summary').click();
   await expect(timeline.locator('.timeline-details')).toHaveAttribute('open', '');
   await timeline.locator('> summary').click();
@@ -780,4 +789,5 @@ test('execution timeline is collapsed, accessible, and retains state across poll
   await page.waitForTimeout(2500);
   await expect(timeline.locator('> summary')).toBeVisible();
   await expect(timeline).not.toHaveAttribute('open', '');
+  await expect(rangeStart).toHaveValue('999');
 });

@@ -81,3 +81,28 @@ test('large nested fleet reuses keyed DOM and preserves interaction state throug
   // Same topology and grouping should require text updates only, with no node insertion/removal.
   expect(work.childListChanges).toBe(0);
 });
+
+test('renders a shared timeline with hundreds of descendant lanes', async ({ page }) => {
+  const sessions = Array.from({ length: 301 }, (_, index) => ({
+    id: `lane-${index}`,
+    ...(index ? { parentID: 'lane-0' } : {}),
+    title: `Agent lane ${index}`,
+    status: 'busy',
+  }));
+  const startAt = '2026-10-12T10:00:00.000Z';
+  await page.route('**/api/state', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ mode: 'local', serverTime: Date.now(), instances: [{
+      instanceId: 'many-lanes', host: 'host', pid: 1, online: true, lastSeen: Date.now(), sessions,
+      timeline: { partial: false, intervals: sessions.map(session => ({
+        sessionId: session.id, startAt, endAt: '2026-10-12T10:00:05.000Z', status: 'busy',
+      })) },
+    }] }),
+  }));
+  await page.goto('/');
+  const root = page.locator('[data-agent-key="many-lanes:lane-0"]');
+  await root.locator(':scope > summary').click();
+  const timeline = root.locator('.execution-timeline');
+  await timeline.locator(':scope > summary').click();
+  await expect(timeline.locator('.timeline-row')).toHaveCount(301);
+});

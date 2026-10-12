@@ -154,6 +154,9 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
 .timeline-row { display: grid; grid-template-columns: minmax(90px, 150px) minmax(360px, 1fr); gap: 10px; align-items: center; margin: 6px 0; }
 .timeline-axis { display: grid; grid-template-columns: minmax(90px, 150px) minmax(360px, 1fr); gap: 10px; color: var(--muted); font-size: 9px; }
 .timeline-axis span:last-child { text-align: right; }
+.timeline-range-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 520px; margin-left: 160px; }
+.timeline-range-controls label { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; }
+.timeline-range-controls input { min-width: 0; width: 100%; padding: 0; accent-color: var(--accent); }
 .timeline-session { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
 .timeline-track { position: relative; height: 20px; border-bottom: 1px solid var(--line); }
 .timeline-now { position: absolute; z-index: 1; top: 0; height: 20px; border-left: 1px dashed var(--text); }

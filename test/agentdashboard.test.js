@@ -35,12 +35,14 @@ test('retry delay grows exponentially, is jittered, and remains bounded', () => 
   assert.equal(retryDelay(100, () => 1), 60000);
 });
 test('requires a strong shared token', () => assert.throws(() => createServer({ token: 'short' })));
-test('authenticated reporting, multiple hosts, stale and expired instances', async t => {
+test('authenticated reporting retains offline instances for companion lifetime', async t => {
   let time = 1000; const { request } = await start(t, { now: () => time });
   for (const [id, host] of [['one', 'alpha'], ['two', 'beta']]) assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(report(id, host)) })).status, 200);
   let state = await (await request('/api/state')).json(); assert.equal(state.instances.length, 2); assert.ok(state.instances.every(i => i.online));
   time += 21000; state = await (await request('/api/state')).json(); assert.ok(state.instances.every(i => !i.online));
-  time += 86400000; assert.equal((await (await request('/api/state')).json()).instances.length, 0);
+  time += 86400000; state = await (await request('/api/state')).json();
+  assert.equal(state.instances.length, 2);
+  assert.ok(state.instances.every(i => !i.online));
 });
 test('accepts legacy reports without a machine identity', async t => {
   const { request } = await start(t);
@@ -168,6 +170,56 @@ test('accepts older reports and validates optional bounded timeline payloads', a
   value.timeline.intervals[0].startAt = null;
   assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 400);
 });
+test('accumulates timeline intervals beyond report-buffer limits and retains ended descendants', async t => {
+  const { request } = await start(t);
+  const send = value => request('/api/report', { method: 'POST', body: JSON.stringify(value) });
+  const stamp = n => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString();
+  const interval = n => ({ sessionId: n % 2 ? 'child' : 'parent', startAt: stamp(n),
+    endAt: stamp(n + 1), status: n % 2 ? 'idle' : 'busy' });
+  const first = report();
+  first.sessions.push({ id: 'child', parentID: 'parent', title: 'Worker', status: 'idle' });
+  first.timeline = { partial: false, intervals: Array.from({ length: 800 }, (_, n) => interval(n)) };
+  assert.equal((await send(first)).status, 200);
+  const next = report();
+  next.sessions.push({ id: 'child', parentID: 'parent', title: 'Worker', status: 'idle' });
+  next.timeline = { partial: true, intervals: Array.from({ length: 800 }, (_, n) => interval(n + 600)) };
+  assert.equal((await send(next)).status, 200);
+  const state = await (await request('/api/state')).json();
+  assert.equal(state.instances[0].timeline.intervals.length, 1400);
+  assert.equal(state.instances[0].timeline.intervals[0].startAt, stamp(0));
+  assert.equal(state.instances[0].timeline.partial, true);
+
+  const completed = report();
+  completed.timeline = { partial: false, intervals: [
+    ...next.timeline.intervals,
+    { sessionId: 'child', startAt: stamp(1400), endAt: null, status: 'busy' },
+  ] };
+  completed.events = [{ sessionId: 'child', timestamp: stamp(1401), kind: 'deleted', summary: 'Session ended' }];
+  assert.equal((await send(completed)).status, 200);
+  const afterDelete = await (await request('/api/state')).json();
+  const child = afterDelete.instances[0].sessions.find(session => session.id === 'child');
+  assert.equal(child.parentID, 'parent');
+  assert.equal(child.archived, true);
+  assert.equal(child.ended, true);
+  assert.equal(afterDelete.instances[0].timeline.intervals.length, 1401);
+  assert.equal(afterDelete.instances[0].timeline.intervals.at(-1).endAt, stamp(1401));
+});
+test('bounds companion-lifetime timeline memory and marks discarded chronology partial', async t => {
+  const { request } = await start(t);
+  const send = value => request('/api/report', { method: 'POST', body: JSON.stringify(value) });
+  const stamp = n => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString();
+  const interval = n => ({ sessionId: 'parent', startAt: stamp(n), endAt: stamp(n + 1), status: n % 2 ? 'idle' : 'busy' });
+  const first = report();
+  first.timeline = { partial: false, intervals: Array.from({ length: 5000 }, (_, n) => interval(n)) };
+  assert.equal((await send(first)).status, 200);
+  const next = report();
+  next.timeline = { partial: false, intervals: [interval(4999), interval(5000)] };
+  assert.equal((await send(next)).status, 200);
+  const state = await (await request('/api/state')).json();
+  assert.equal(state.instances[0].timeline.intervals.length, 5000);
+  assert.equal(state.instances[0].timeline.intervals[0].startAt, stamp(1));
+  assert.equal(state.instances[0].timeline.partial, true);
+});
 test('tracks bounded idempotent usage per session and keeps latest context separate', async t => {
   const originalFetch = globalThis.fetch;
   const keys = ['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'AGENTDASHBOARD_TELEMETRY', 'XDG_CONFIG_HOME'];
@@ -243,7 +295,8 @@ test('reconciles same-process generations without merging concurrent instances',
 
   time += 86400001;
   instances = (await (await request('/api/state')).json()).instances;
-  assert.equal(instances.length, 0, 'replaced generations retain the existing 24-hour expiry');
+  assert.equal(instances.length, 2, 'only the replaced generation expires; current offline sessions remain for the companion lifetime');
+  assert.ok(!instances.some(instance => instance.instanceId === 'old-generation'));
 });
 test('offline instances recover under the same generation and remain distinct from replaced ones', async t => {
   let time = 1000;
@@ -436,7 +489,7 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   await emit('session.status', { sessionID: 'child', status: { type: 'retry' } });
   await waitFor(i => i?.sessions.find(s => s.id === 'child')?.status === 'retry');
   await emit('session.deleted', { info: { id: 'child' } });
-  await waitFor(i => i && !i.sessions.some(s => s.id === 'child'));
+  await waitFor(i => i && i.sessions.some(s => s.id === 'child' && s.archived));
 });
 test('replacing a base session removes the previous root but retains the new root and its children', async t => {
   const originalFetch = globalThis.fetch;
