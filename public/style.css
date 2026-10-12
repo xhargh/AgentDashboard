@@ -139,6 +139,14 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
 .agent-tree[open] > .session-card { border-radius: 0 0 10px 10px; border-top: 0; }
 .agent-tree-children { margin: 12px 0 0 18px; padding-left: 16px; border-left: 1px solid #3a4941; }
 .agent-tree-children > .agent-tree:last-child { margin-bottom: 0; }
+.subagent-group { margin: 12px 0 0; padding: 0 12px 12px; border: 1px solid var(--line); border-radius: 0 0 10px 10px; background: #15191c; }
+.subagent-heading { display: flex; align-items: center; gap: 10px; min-height: 42px; color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer; list-style-position: inside; }
+.subagent-heading .attention-summary { margin: 0 0 0 auto; }
+.subagent-row { margin: 0 0 6px calc(var(--tree-depth, 0) * 16px); }
+.subagent-row > summary { padding: 9px 12px; border-radius: 7px; background: var(--surface); }
+.subagent-row > summary .tree-activity, .subagent-row > summary .tree-directory { display: none; }
+.subagent-row[open] > .session-card { border-radius: 0 0 7px 7px; }
+.subagent-row .session { padding: 14px 16px; }
 .todos { list-style: none; padding: 12px 0 0; margin: 14px 0 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .todos li { padding: 3px 0; overflow-wrap: anywhere; }
 .instance-warning { margin: 0; padding: 12px 24px; border-bottom: 1px solid #51432f; background: #30291e; color: var(--warning); font-size: 11px; overflow-wrap: anywhere; }
@@ -248,6 +256,8 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
   .tree-title { flex: 1; }
   .agent-tree > summary .attention-summary { flex-basis: 100%; padding-left: 14px; }
   .agent-tree-children { margin-left: 8px; padding-left: 8px; }
+  .subagent-group { margin-left: 0; padding: 0 8px 8px; }
+  .subagent-row { margin-left: calc(var(--tree-depth, 0) * 8px); }
   .session-card > details { padding: 12px 18px; }
   .instance-warning { padding: 12px 18px; }
   .activity-event { flex-wrap: wrap; gap: 2px 12px; }
