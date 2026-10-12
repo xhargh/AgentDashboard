@@ -473,6 +473,29 @@ test('shows one accessible working directory and status, without idle activity d
   await expect(childTree.locator(':scope > summary .tree-directory')).toHaveText('/work/projects/child');
 });
 
+test('shows safe retry deadline and elapsed state plus a categorized error', async ({ page }) => {
+  const now = Date.now();
+  await installStateFixture(page, () => {
+    const state = report('Retry safely', 'retry', now);
+    state.instances[0].sessions[0].stateChangedAt = new Date(now - 45000).toISOString();
+    state.instances[0].sessions[0].retry = { attempt: 3, nextRetryAt: new Date(now + 30000).toISOString(), message: 'private retry details' };
+    state.instances[0].sessions[1].status = 'error';
+    state.instances[0].sessions[1].errorCategory = 'timeout';
+    return state;
+  });
+  await page.goto('/');
+  const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  await root.locator(':scope > summary').click();
+  await expect(root.locator('.retry-context')).toContainText('Retrying · attempt 3');
+  await expect(root.locator('.retry-context')).toContainText('in retry state');
+  await expect(root.locator('.retry-context')).toContainText('next retry in');
+  await expect(root).not.toContainText('private retry details');
+  await root.locator(':scope > article.session-card > .subagent-group > summary').click();
+  const child = page.locator('[data-agent-key="instance-alpha:child-alpha"]');
+  await child.locator(':scope > summary').click();
+  await expect(child.locator('.error-context')).toHaveText('Last safe error category · timeout');
+});
+
 test('warns per instance when reports use legacy host-based identity', async ({ page }) => {
   const now = Date.now();
   await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [

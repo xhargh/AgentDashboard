@@ -48,9 +48,10 @@ function validObservabilityEvent(event, reportInstanceId) {
     ['observed', 'inferred'].includes(event.source) &&
     (event.outcome === undefined || ['started', 'completed', 'failure', 'cancelled'].includes(event.outcome)) &&
     (attributes === undefined || attributes && typeof attributes === 'object' && !Array.isArray(attributes) &&
-      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'nextRetryAt'].includes(key) &&
+      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'nextRetryAt', 'errorCategory'].includes(key) &&
         (boundedString(value, 100) || Number.isSafeInteger(value) && value >= 0) &&
-        (key !== 'toolStatus' || ['pending', 'running', 'completed', 'error'].includes(value))));
+        (key !== 'toolStatus' || ['pending', 'running', 'completed', 'error'].includes(value)) &&
+        (key !== 'errorCategory' || ['timeout', 'permission', 'cancelled', 'rate-limit', 'provider', 'tool', 'unknown'].includes(value))));
 }
 function validTimeline(timeline) {
   return timeline && typeof timeline === 'object' && !Array.isArray(timeline) && typeof timeline.partial === 'boolean' &&
@@ -73,6 +74,10 @@ function validReport(v) {
       boundedString(s.status, 40) && (s.title === undefined || boundedString(s.title)) && (s.directory === undefined || boundedString(s.directory)) &&
        (s.activity === undefined || boundedString(s.activity)) && (s.agent === undefined || boundedString(s.agent, 200)) &&
        (s.model === undefined || validModel(s.model)) && (s.usage === undefined || validUsage(s.usage)) &&
+       (s.retry === undefined || s.retry && typeof s.retry === 'object' && !Array.isArray(s.retry) &&
+         (s.retry.attempt === undefined || Number.isSafeInteger(s.retry.attempt) && s.retry.attempt >= 0) &&
+         (s.retry.nextRetryAt === undefined || validTimestamp(s.retry.nextRetryAt))) &&
+       (s.errorCategory === undefined || ['timeout', 'permission', 'cancelled', 'rate-limit', 'provider', 'tool', 'unknown'].includes(s.errorCategory)) &&
        ['firstObservedAt', 'lastActivityAt', 'stateChangedAt'].every(key => s[key] === undefined || validTimestamp(s[key])) &&
        (s.restored === undefined || typeof s.restored === 'boolean') &&
       (s.parentID === undefined || boundedString(s.parentID, 200)) && (s.todos === undefined || Array.isArray(s.todos) && s.todos.length <= 200 &&

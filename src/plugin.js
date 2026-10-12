@@ -49,6 +49,26 @@ function updateUsage(session, info) {
     }
   }
 }
+function safeRetrySnapshot(status) {
+  const retry = {};
+  if (Number.isSafeInteger(status?.attempt) && status.attempt >= 0 && status.attempt <= 1_000_000) retry.attempt = status.attempt;
+  const deadline = status?.nextRetryAt;
+  const timestamp = Number.isFinite(deadline) ? new Date(deadline).toISOString()
+    : typeof deadline === 'string' && Number.isFinite(Date.parse(deadline)) ? new Date(deadline).toISOString() : undefined;
+  if (timestamp) retry.nextRetryAt = timestamp;
+  return Object.keys(retry).length ? retry : undefined;
+}
+function safeErrorCategory(error) {
+  const source = typeof error === 'string' ? error : [error?.name, error?.type, error?.code].filter(value => typeof value === 'string').join(' ');
+  const normalized = source.toLowerCase();
+  if (/timeout|timed.?out|etimedout/.test(normalized)) return 'timeout';
+  if (/permission|denied|unauthor/.test(normalized)) return 'permission';
+  if (/abort|cancel/.test(normalized)) return 'cancelled';
+  if (/rate.?limit|quota|429/.test(normalized)) return 'rate-limit';
+  if (/provider|model|api/.test(normalized)) return 'provider';
+  if (/tool/.test(normalized)) return 'tool';
+  return 'unknown';
+}
 function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
   if (value === undefined || value === '') return Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, true]));
   let config;
@@ -77,6 +97,8 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
     if (privacy.tasks && session.todos) result.todos = session.todos;
     if (privacy.modelMetrics && session.model) result.model = session.model;
     if (privacy.modelMetrics && session.usage) result.usage = session.usage;
+    if (session.retry) result.retry = session.retry;
+    if (session.errorCategory) result.errorCategory = session.errorCategory;
     for (const key of ['firstObservedAt', 'lastActivityAt', 'stateChangedAt']) if (session[key] !== undefined) result[key] = session[key];
     if (session.restored) result.restored = true;
     return result;
@@ -284,11 +306,34 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
       }
       if (p.sessionID) {
         const s = session(p.sessionID);
-        if (event.type === 'session.status') { const changed = markState(s, p.status.type); if (changed) recordObserved(s, p.status.type); if (s.status === 'idle') s.activity = 'Ready'; }
-        if (event.type === 'session.idle') { if (markState(s, 'idle')) recordObserved(s, 'idle'); s.activity = 'Ready'; }
-        if (event.type === 'session.error') { if (markState(s, 'error')) recordObserved(s, 'error'); s.activity = 'Session error'; markActivity(s); }
-        if (event.type === 'permission.asked' || event.type === 'permission.updated') { if (markState(s, 'waiting')) recordObserved(s, 'waiting'); s.activity = 'Waiting for permission'; markActivity(s); }
-        if (event.type === 'permission.replied') { if (markState(s, 'busy')) recordObserved(s, 'permissionAnswered'); s.activity = 'Permission answered'; markActivity(s); }
+        if (event.type === 'session.status') {
+          const status = p.status?.type;
+          const changed = markState(s, status);
+          if (status === 'retry') {
+            let retry = safeRetrySnapshot(p.status);
+            if (Number.isSafeInteger(s.retry?.attempt) && Number.isSafeInteger(retry?.attempt) && retry.attempt < s.retry.attempt) retry = s.retry;
+            const retryChanged = JSON.stringify(s.retry) !== JSON.stringify(retry);
+            if (changed || retryChanged) {
+              s.retry = retry;
+              recordObserved(s, 'retry', { attributes: retry, eventId: `retry:${s.id}:${retry?.attempt ?? 'unknown'}:${retry?.nextRetryAt ?? 'unknown'}` });
+            }
+          } else {
+            if (changed) recordObserved(s, status);
+            delete s.retry;
+            if (status === 'error') s.errorCategory ||= 'unknown';
+            else delete s.errorCategory;
+          }
+          if (s.status === 'idle') s.activity = 'Ready';
+        }
+        if (event.type === 'session.idle') { if (markState(s, 'idle')) recordObserved(s, 'idle'); delete s.retry; delete s.errorCategory; s.activity = 'Ready'; }
+        if (event.type === 'session.error') {
+          const category = safeErrorCategory(p.error);
+          const changed = markState(s, 'error'), categoryChanged = category !== s.errorCategory;
+          if (changed || categoryChanged) recordObserved(s, 'error', { attributes: { errorCategory: category }, eventId: `error:${s.id}:${category}` });
+          s.errorCategory = category; delete s.retry; s.activity = 'Session error'; markActivity(s);
+        }
+        if (event.type === 'permission.asked' || event.type === 'permission.updated') { if (markState(s, 'waiting')) recordObserved(s, 'waiting'); delete s.retry; delete s.errorCategory; s.activity = 'Waiting for permission'; markActivity(s); }
+        if (event.type === 'permission.replied') { if (markState(s, 'busy')) recordObserved(s, 'permissionAnswered'); delete s.retry; delete s.errorCategory; s.activity = 'Permission answered'; markActivity(s); }
         if (event.type === 'todo.updated') { s.todos = p.todos?.map(t => ({ content: t.content, status: t.status })); markActivity(s); }
       }
       if (event.type === 'message.updated' && p.info?.sessionID) {
