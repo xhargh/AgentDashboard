@@ -59,8 +59,12 @@ footer a:hover { color: var(--text); }
 .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 23px 0; }
 .metric { padding: 0 28px; border-right: 1px solid var(--line); }
 .metric:last-child { border: 0; }
-.metric span { display: block; color: var(--muted); font-size: 12px; }
-.metric small { display: block; margin-top: 4px; font-size: 10px; }
+.metric-label { position: relative; display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--muted); font-size: 12px; }
+.metric-label > span { overflow-wrap: anywhere; }
+.metric-help { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: transparent; color: var(--muted); font-size: 10px; line-height: 1; }
+.metric-help:hover { background: var(--raised); color: var(--text); }
+.metric-tooltip { position: absolute; z-index: 2; left: 0; bottom: calc(100% + 8px); width: max-content; max-width: min(260px, 70vw); padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--raised); color: var(--text); font-size: 11px; line-height: 1.45; box-shadow: 0 5px 16px #0008; visibility: hidden; opacity: 0; pointer-events: none; }
+.metric-help:hover + .metric-tooltip, .metric-help:focus-visible + .metric-tooltip { visibility: visible; opacity: 1; }
 .metric strong { display: block; font-size: 32px; font-weight: 550; letter-spacing: -1px; font-variant-numeric: tabular-nums; line-height: 1.2; margin-top: 8px; }
 .metric:nth-child(3) strong { color: var(--accent); }
 .fleet-controls { position: relative; margin: 32px 0 24px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
@@ -199,6 +203,7 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
   main { padding: 36px 28px 48px; }
   footer { padding: 20px 28px; }
   .metric { padding: 0 20px; }
+  .metric:nth-child(n+3) .metric-tooltip { right: 0; left: auto; }
   .filter-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .git-grid { grid-template-columns: 1fr; }
   .live-label { display: none; }
@@ -218,8 +223,9 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
   .metric { padding: 18px 20px; }
   .metric:nth-child(2) { border-right: 0; }
   .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .metric:nth-child(n+2) .metric-tooltip { right: 0; left: auto; }
   .metric strong { font-size: 28px; }
-  .metric span { font-size: 10px; }
+  .metric-label { font-size: 10px; }
   .fleet-controls { margin-top: 26px; }
   .fleet-toolbar { padding-right: 0; flex-wrap: wrap; gap: 16px; }
   .fleet-title { min-height: 40px; }
