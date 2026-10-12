@@ -110,10 +110,11 @@ test('local mode connects automatically and filters fleet activity', async ({ pa
   await expect(page.getByRole('heading', { name: 'Working · 1' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Waiting for input · 1' })).toBeVisible();
   await expect(page.getByText('Idle top-level sessions ready for your next message · count is sessions across all computers and instances')).toBeVisible();
+  await expect(page.locator('.metric').filter({ has: page.getByText('Computers online', { exact: true }) })).toHaveCount(0);
   const instancesMetric = page.locator('.metric').filter({ has: page.getByText('OpenCode instances', { exact: true }) });
   await expect(instancesMetric.locator('.metric-tooltip')).toHaveText('Online instance reports; one computer may run several');
   await expect(instancesMetric.locator('.metric-help')).toHaveAttribute('aria-describedby', await instancesMetric.locator('.metric-tooltip').getAttribute('id'));
-  await expect(page.getByRole('button', { name: 'Metric description' })).toHaveCount(4);
+  await expect(page.getByRole('button', { name: 'Metric description' })).toHaveCount(3);
   await instancesMetric.locator('.metric-help').focus();
   await expect(instancesMetric.locator('.metric-tooltip')).toBeVisible();
   await expect(instancesMetric.locator('small')).toHaveCount(0);
@@ -261,6 +262,7 @@ test('network mode requires a token, rejects a bad token, and connects with a va
   await page.getByRole('button', { name: 'Connect' }).click();
   await expect(page.getByText('● Connected · network mode')).toBeVisible();
   await expect(page.locator('.tree-title').filter({ hasText: 'Build dashboard' })).toBeVisible();
+  await expect(page.locator('.metric').filter({ has: page.getByText('Computers online', { exact: true }) })).toHaveCount(1);
 
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await expect(login).toBeVisible();

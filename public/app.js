@@ -272,12 +272,13 @@ function render() {
   const classificationsFor = i => sessionClassifications.get(i.instanceId);
   const sessions = online.flatMap(i => i.sessions.map(s => ({ session: s, classification: classificationsFor(i).get(s.id) })));
   const metrics = el('div');
-  metrics.append(...[
-    ['Computers online', new Set(online.map(machineKey)).size, 'Distinct online computers'],
+  const metricItems = [
     ['OpenCode instances', online.length, 'Online instance reports; one computer may run several'],
     ['Active agents', sessions.filter(({ session, classification }) => !session.parentID && isActiveCategory(classification)).length, 'Top-level sessions needing attention or doing work'],
     ['Active subagents', sessions.filter(({ session, classification }) => session.parentID && isActiveCategory(classification)).length, 'Child sessions needing attention or doing work'],
-  ].map(([label, value, detail], index) => {
+  ];
+  if (authRequired) metricItems.unshift(['Computers online', new Set(online.map(machineKey)).size, 'Distinct online computers']);
+  metrics.append(...metricItems.map(([label, value, detail], index) => {
     const n = el('article', undefined, 'metric');
     const labelRow = el('div', undefined, 'metric-label');
     labelRow.append(el('span', label));
