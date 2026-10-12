@@ -15,7 +15,8 @@ const assets = new Map(await Promise.all(publicAssets.map(async name =>
     type: mimeTypes[name.slice(name.lastIndexOf('.'))] }])));
 function equal(a, b) { const x = Buffer.from(a || ''), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); }
 const LIMITS = Object.freeze({ instances: 2000, sessionsPerReport: 1000, sessionsTotal: 20000,
-  eventsPerReport: 200, eventsTotal: 10000, timelineIntervals: 1000, field: 4096, summary: 200, pruneInterval: 60000 });
+  eventsPerReport: 200, eventsTotal: 10000, timelineIntervals: 5000, timelineIntervalsTotal: 5000,
+  field: 4096, summary: 200, pruneInterval: 60000 });
 function boundedString(value, max = LIMITS.field) { return typeof value === 'string' && value.length <= max; }
 function validModel(model) {
   return model && typeof model === 'object' && !Array.isArray(model) &&
@@ -70,7 +71,9 @@ export function createServer({ token, now = Date.now } = {}) {
     const time = now();
     if (!force && time - lastPrune < LIMITS.pruneInterval) return;
     lastPrune = time;
-    for (const [key, v] of instances) if (time - v.lastSeen > 86400000) { instances.delete(key); revision++; }
+    for (const [key, instance] of instances) {
+      if (instance.replaced && time - instance.lastSeen > 86400000) { instances.delete(key); revision++; }
+    }
   };
   const sessionCount = () => { let count = 0; for (const item of instances.values()) count += item.sessions.length; return count; };
   const evictForCapacity = incomingId => {
@@ -84,6 +87,48 @@ export function createServer({ token, now = Date.now } = {}) {
       instances.delete(candidates[0][0]); revision++;
     }
     return true;
+  };
+  const mergeTimeline = (previous, incoming) => {
+    if (!incoming) return previous && { ...previous, intervals: previous.intervals.map(interval => ({ ...interval })) };
+    const byStart = new Map();
+    for (const interval of previous?.intervals || []) byStart.set(`${interval.sessionId}\0${interval.startAt}\0${interval.status}`, { ...interval });
+    for (const interval of incoming.intervals) {
+      const key = `${interval.sessionId}\0${interval.startAt}\0${interval.status}`;
+      const prior = byStart.get(key);
+      byStart.set(key, { ...prior, ...interval, endAt: interval.endAt ?? prior?.endAt ?? null });
+    }
+    const incomingBySession = new Map();
+    for (const interval of incoming.intervals) {
+      if (!incomingBySession.has(interval.sessionId)) incomingBySession.set(interval.sessionId, []);
+      incomingBySession.get(interval.sessionId).push(interval);
+    }
+    for (const intervals of incomingBySession.values()) intervals.sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt));
+    for (const interval of byStart.values()) {
+      if (interval.endAt !== null) continue;
+      const next = (incomingBySession.get(interval.sessionId) || []).find(candidate =>
+        Date.parse(candidate.startAt) > Date.parse(interval.startAt));
+      if (next) interval.endAt = next.startAt;
+    }
+    const intervals = [...byStart.values()].sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt) || a.sessionId.localeCompare(b.sessionId));
+    let partial = Boolean(previous?.partial || incoming.partial);
+    if (intervals.length > LIMITS.timelineIntervals) {
+      intervals.splice(0, intervals.length - LIMITS.timelineIntervals);
+      partial = true;
+    }
+    return { partial, intervals };
+  };
+  const trimTimelineCapacity = () => {
+    let count = [...instances.values()].reduce((sum, instance) => sum + (instance.timeline?.intervals.length || 0), 0);
+    if (count <= LIMITS.timelineIntervalsTotal) return;
+    const oldest = [...instances.values()].flatMap(instance => (instance.timeline?.intervals || [])
+      .map(interval => ({ instance, interval })))
+      .sort((a, b) => Date.parse(a.interval.startAt) - Date.parse(b.interval.startAt));
+    for (const { instance, interval } of oldest) {
+      if (count <= LIMITS.timelineIntervalsTotal) break;
+      instance.timeline.intervals.splice(instance.timeline.intervals.indexOf(interval), 1);
+      instance.timeline.partial = true;
+      count--;
+    }
   };
   return http.createServer(async (req, res) => {
     const reply = (status, data) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(data)); };
@@ -141,9 +186,32 @@ export function createServer({ token, now = Date.now } = {}) {
             }
           }
           const previous = instances.get(v.instanceId);
+          const timeline = mergeTimeline(previous?.timeline, v.timeline);
+          const sessionsById = new Map(v.sessions.map(session => [session.id, session]));
+          const timelineSessionIds = new Set((timeline?.intervals || []).map(interval => interval.sessionId));
+          const deletedAt = new Map((v.events || []).filter(event => event.kind === 'deleted').map(event => [event.sessionId, event.timestamp]));
+          let addedArchive = true;
+          while (addedArchive) {
+            addedArchive = false;
+            for (const session of previous?.sessions || []) {
+              if (!session.parentID || sessionsById.has(session.id) || !timelineSessionIds.has(session.id) || !sessionsById.has(session.parentID)) continue;
+              sessionsById.set(session.id, { ...session, status: 'idle', activity: undefined,
+                archived: true, ended: deletedAt.has(session.id) || Boolean(session.ended),
+                archivedAt: session.archivedAt ?? previous.lastSeen });
+              const endedAt = Date.parse(deletedAt.get(session.id));
+              if (Number.isFinite(endedAt)) for (const interval of timeline?.intervals || []) {
+                if (interval.sessionId === session.id && interval.endAt === null && endedAt >= Date.parse(interval.startAt)) {
+                  interval.endAt = deletedAt.get(session.id);
+                }
+              }
+              else if (timeline) timeline.partial = true;
+              addedArchive = true;
+            }
+          }
+          const sessions = [...sessionsById.values()];
           const oldCount = previous ? previous.sessions.length : 0;
-          if (sessionCount() - oldCount + v.sessions.length > LIMITS.sessionsTotal) {
-            while (sessionCount() - oldCount + v.sessions.length > LIMITS.sessionsTotal) {
+          if (sessionCount() - oldCount + sessions.length > LIMITS.sessionsTotal) {
+            while (sessionCount() - oldCount + sessions.length > LIMITS.sessionsTotal) {
               const priority = item => item.online && item.sessions.some(s => ['busy', 'retry', 'waiting'].includes(s.status)) ? 2 : item.online ? 1 : 0;
               const candidates = [...instances.entries()].filter(([id]) => id !== v.instanceId)
                 .sort((a, b) => priority(a[1]) - priority(b[1]) || a[1].lastSeen - b[1].lastSeen);
@@ -153,9 +221,11 @@ export function createServer({ token, now = Date.now } = {}) {
           }
           const online = previous ? now() - previous.lastSeen < 20000 : false;
           const replaced = Boolean(supersededBy || previous?.replaced);
-          const meaningfulChange = !previous || JSON.stringify({ ...previous, lastSeen: undefined, online: undefined, replaced: undefined, replacedBy: undefined }) !== JSON.stringify(v);
-          instances.set(v.instanceId, { ...v, ...(replaced ? { replaced: true, replacedBy: supersededBy || previous.replacedBy } : {}),
+          const report = { ...v, sessions, ...(timeline ? { timeline } : {}) };
+          const meaningfulChange = !previous || JSON.stringify({ ...previous, lastSeen: undefined, online: undefined, replaced: undefined, replacedBy: undefined }) !== JSON.stringify(report);
+          instances.set(v.instanceId, { ...report, ...(replaced ? { replaced: true, replacedBy: supersededBy || previous.replacedBy } : {}),
             lastSeen: replaced && previous ? previous.lastSeen : seenAt, online: !replaced });
+          trimTimelineCapacity();
           let eventCount = [...instances.values()].reduce((count, instance) => count + (instance.events?.length || 0), 0);
           if (eventCount > LIMITS.eventsTotal) {
             for (const instance of [...instances.values()].sort((a, b) => a.lastSeen - b.lastSeen)) {

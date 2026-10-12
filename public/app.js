@@ -18,6 +18,7 @@ const collapsedAgents = new Set();
 const expandedSubagentGroups = new Set();
 const expandedActivity = new Set();
 const expandedExecution = new Set();
+const timelineRanges = new Map();
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 function formatTimestamp(value) {
   const date = new Date(value);
@@ -90,7 +91,7 @@ function descendantSessions(session, sessions) {
   visit(session.id);
   return descendants;
 }
-function renderExecutionTimeline(instance, parent, eligible) {
+function renderExecutionTimeline(instance, parent) {
   const key = `execution:${instance.instanceId}:${parent.id}`;
   const details = el('details', undefined, 'execution-timeline');
   details.dataset.agentKey = key;
@@ -100,6 +101,9 @@ function renderExecutionTimeline(instance, parent, eligible) {
   const intervals = Array.isArray(intervalList) ? intervalList : [];
   const descendants = descendantSessions(parent, instance.sessions);
   const rows = [parent, ...descendants].map(session => ({ session, intervals: intervals.filter(item => item.sessionId === session.id) }));
+  const intervalEnd = (item, session) => item.endAt ? Date.parse(item.endAt)
+    : session.archived ? (session.archivedAt || Date.parse(item.startAt))
+      : instance.online ? Date.now() : (instance.lastSeen || Date.parse(item.startAt));
   const relevant = rows.flatMap(row => row.intervals.filter((item, index, list) =>
     !(item.status === 'idle' && index === list.length - 1 && item.endAt === null)));
   details.append(el('summary', 'Execution timeline', 'execution-heading'));
@@ -112,16 +116,27 @@ function renderExecutionTimeline(instance, parent, eligible) {
     details.append(el('p', message, 'timeline-message'));
     return details;
   }
-  const times = relevant.flatMap(item => [Date.parse(item.startAt), item.endAt ? Date.parse(item.endAt) : Date.now()]).filter(Number.isFinite);
+  const relevantSet = new Set(relevant);
+  const times = rows.flatMap(row => row.intervals.filter(item => relevantSet.has(item))
+    .flatMap(item => [Date.parse(item.startAt), intervalEnd(item, row.session)])).filter(Number.isFinite);
   const min = Math.min(...times), max = Math.max(...times), span = Math.max(1, max - min);
   const chart = el('div', undefined, 'timeline-chart'); chart.setAttribute('role', 'img');
   chart.setAttribute('aria-label', 'Observed session states on a shared wall-clock time scale');
   const axis = el('div', undefined, 'timeline-axis');
   axis.append(el('span', formatTimestamp(min)), el('span', formatTimestamp(max)));
   chart.append(axis);
+  const savedRange = timelineRanges.get(key) || [0, 1000];
+  const rangeControls = el('div', undefined, 'timeline-range-controls');
+  const rangeStartLabel = el('label', 'From');
+  const rangeStart = el('input'); rangeStart.type = 'range'; rangeStart.min = '0'; rangeStart.max = '999'; rangeStart.value = String(savedRange[0]);
+  rangeStart.setAttribute('aria-label', 'Timeline range start'); rangeStartLabel.append(rangeStart);
+  const rangeEndLabel = el('label', 'To');
+  const rangeEnd = el('input'); rangeEnd.type = 'range'; rangeEnd.min = '1'; rangeEnd.max = '1000'; rangeEnd.value = String(savedRange[1]);
+  rangeEnd.setAttribute('aria-label', 'Timeline range end'); rangeEndLabel.append(rangeEnd);
+  rangeControls.append(rangeStartLabel, rangeEndLabel);
   for (const row of rows) {
     const line = el('div', undefined, 'timeline-row');
-    const sessionLabel = `${row.session.title || 'Session'}${instance.online ? '' : ' · offline'}`;
+    const sessionLabel = `${row.session.title || 'Session'}${row.session.archived ? row.session.ended ? ' · ended' : ' · last observed' : instance.online ? '' : ' · offline'}`;
     line.append(el('span', sessionLabel, 'timeline-session'));
     const track = el('div', undefined, 'timeline-track');
     const visibleIntervals = row.intervals.filter((item, index, list) =>
@@ -132,30 +147,39 @@ function renderExecutionTimeline(instance, parent, eligible) {
       track.append(unknown);
     }
     for (const item of visibleIntervals) {
-      const start = Date.parse(item.startAt), end = item.endAt ? Date.parse(item.endAt) : Date.now();
+      const start = Date.parse(item.startAt), end = intervalEnd(item, row.session);
       const block = el('span', item.status, `timeline-interval timeline-${item.status}`);
+      block.dataset.startAt = item.startAt;
+      block.dataset.endAt = String(end);
       block.style.left = `${Math.max(0, (start - min) / span * 100)}%`;
       block.style.width = `${Math.max(0.5, (end - start) / span * 100)}%`;
-      block.title = `${item.status} · ${formatTimestamp(item.startAt)}${item.endAt ? ` – ${formatTimestamp(item.endAt)}` : ' · ongoing'}`;
+      const endLabel = item.endAt ? ` – ${formatTimestamp(end)}` : row.session.archived || !instance.online
+        ? ` – ${formatTimestamp(end)} · last observed` : ' · ongoing';
+      block.title = `${item.status} · ${formatTimestamp(item.startAt)}${endLabel}`;
       track.append(block);
     }
     line.append(track); chart.append(line);
   }
-  if (relevant.some(item => !item.endAt)) {
+  if (relevant.some(item => !item.endAt) && (instance.online || Number.isFinite(instance.lastSeen))) {
     for (const track of chart.querySelectorAll('.timeline-track')) {
       const marker = el('span', undefined, 'timeline-now');
       marker.setAttribute('aria-hidden', 'true');
-      marker.style.left = `${Math.max(0, (Date.now() - min) / span * 100)}%`;
+      const markerTime = instance.online ? Date.now() : instance.lastSeen;
+      marker.style.left = `${Math.max(0, (markerTime - min) / span * 100)}%`;
+      marker.dataset.time = String(markerTime);
       track.append(marker);
     }
   }
   const list = el('ol', undefined, 'timeline-list');
   for (const item of [...relevant].sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt))) {
     const session = instance.sessions.find(candidate => candidate.id === item.sessionId);
-    const text = `${session?.title || 'Session'} · ${item.status} · ${formatTimestamp(item.startAt)}${item.endAt ? ` to ${formatTimestamp(item.endAt)}` : ' · ongoing'}`;
+    const end = intervalEnd(item, session || parent);
+    const endLabel = item.endAt ? ` to ${formatTimestamp(end)}` : session?.archived || !instance.online
+      ? ` to ${formatTimestamp(end)} · last observed` : ' · ongoing';
+    const text = `${session?.title || 'Session'} · ${item.status} · ${formatTimestamp(item.startAt)}${endLabel}`;
     list.append(el('li', text));
   }
-  details.append(chart);
+  details.append(chart, rangeControls);
   const legend = el('div', undefined, 'timeline-legend');
   for (const [label, state] of [['Working', 'busy'], ['Idle', 'idle'], ['Permission wait', 'waiting'], ['Retry', 'retry'], ['Error', 'error'], ['Offline', 'offline'], ['Unknown/partial', 'unknown']]) {
     const item = el('span', undefined, 'timeline-legend-item');
@@ -164,7 +188,36 @@ function renderExecutionTimeline(instance, parent, eligible) {
   const disclosure = el('details', undefined, 'timeline-details');
   disclosure.append(el('summary', 'Show interval details'), list);
   details.append(legend, disclosure);
-  details.append(el('p', instance.timeline?.partial ? 'Partial history: earlier transitions may be missing or truncated.' : 'Intervals show observed event times; they do not represent compute time.', 'timeline-message'));
+  details.append(el('p', instance.timeline?.partial
+    ? `Partial history: earlier transitions may be missing or truncated; earliest known event ${formatTimestamp(min)}.`
+    : 'Intervals show observed event times; they do not represent compute time.', 'timeline-message'));
+  function applyRange(active) {
+    let from = Number(rangeStart.value), to = Number(rangeEnd.value);
+    if (from >= to) {
+      if (active === rangeStart) to = Math.min(1000, from + 1);
+      else from = Math.max(0, to - 1);
+    }
+    rangeStart.value = String(from); rangeEnd.value = String(to);
+    timelineRanges.set(key, [from, to]);
+    const visibleStart = min + span * from / 1000, visibleEnd = min + span * to / 1000;
+    const visibleSpan = Math.max(1, visibleEnd - visibleStart);
+    axis.firstChild.textContent = formatTimestamp(visibleStart);
+    axis.lastChild.textContent = formatTimestamp(visibleEnd);
+    for (const track of chart.querySelectorAll('.timeline-track')) {
+      for (const block of track.querySelectorAll('.timeline-interval')) {
+        if (!block.dataset.startAt) { block.hidden = false; block.style.left = '0%'; block.style.width = '100%'; continue; }
+        const start = Date.parse(block.dataset.startAt), end = Number(block.dataset.endAt);
+        block.hidden = end < visibleStart || start > visibleEnd;
+        block.style.left = `${Math.max(0, (start - visibleStart) / visibleSpan * 100)}%`;
+        block.style.width = `${Math.max(0.5, (Math.min(end, visibleEnd) - Math.max(start, visibleStart)) / visibleSpan * 100)}%`;
+      }
+      const marker = track.querySelector('.timeline-now');
+      if (marker) marker.style.left = `${Math.min(100, Math.max(0, (Number(marker.dataset.time) - visibleStart) / visibleSpan * 100))}%`;
+    }
+  }
+  rangeStart.addEventListener('input', () => applyRange(rangeStart));
+  rangeEnd.addEventListener('input', () => applyRange(rangeEnd));
+  applyRange();
   return details;
 }
 function tokenCount(usage) { return (usage?.input || 0) + (usage?.output || 0); }
@@ -347,7 +400,7 @@ function render() {
         for (const [key, label] of [['status', 'Status'], ['log', 'Recent commits'], ['worktrees', 'Worktrees']]) { const block = el('section'); block.append(el('h4', label), el('pre', typeof i.git[key] === 'string' ? i.git[key] || 'Clean / empty' : 'Waiting for Git snapshot')); grid.append(block); }
         details.append(grid); card.append(details);
       }
-      if (!compact) card.append(renderExecutionTimeline(i, s, eligible));
+      if (!compact) card.append(renderExecutionTimeline(i, s));
       if (!compact && children.length) {
         const descendants = descendantSessions(s, i.sessions);
         const visible = descendants.filter(child => eligible.has(child.id));
