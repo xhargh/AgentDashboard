@@ -95,7 +95,7 @@ function renderMetrics(info, session, online, sessions) {
   const modelLabel = model?.providerID && (model.name || model.modelID)
     ? `${model.providerName || model.providerID} / ${model.name || model.modelID}` : 'Model unavailable';
   metrics.append(el('p', modelLabel, 'model-label'));
-  metrics.append(el('p', model?.variant ? `${model.variant} variant` : 'Variant unavailable', 'variant-label'));
+  if (model?.variant) metrics.append(el('p', `${model.variant} variant`, 'variant-label'));
   const usage = session.usage;
   if (Number.isSafeInteger(usage?.contextEstimate) && Number.isSafeInteger(model?.contextLimit) && model.contextLimit > 0) {
     const used = usage.contextEstimate, limit = model.contextLimit, percentage = Math.min(100, used / limit * 100);
@@ -217,14 +217,24 @@ function render() {
       summary.append(summaryBadge);
       if (children.length) summary.append(el('span', `${children.length} child${children.length === 1 ? '' : 'ren'}`, 'tree-count'));
       if (classification.attentionRequired) summary.append(el('span', 'Attention in this branch', 'attention-summary'));
-      summary.append(el('span', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'tree-activity'));
+      const activityText = s.activity?.trim();
+      if (activityText && !/^(ready|idle|waiting for input|waiting for permission)$/i.test(activityText) && activityText !== display.label) {
+        summary.append(el('span', activityText, 'tree-activity'));
+      }
+      const directory = s.directory || i.directory;
+      if (directory) {
+        const path = el('span', directory, 'tree-directory');
+        path.title = directory;
+        path.setAttribute('aria-label', `Working directory: ${directory}`);
+        summary.append(path);
+      }
       container.append(summary);
       const card = el('article', undefined, 'session-card');
       if (!i.machineId) {
         card.append(el('p', 'This instance is using a legacy host-based identity because its report has no machine ID. Update or reinstall the AgentDashboard plugin to use a stable machine identity.', 'instance-warning'));
       }
       const row = el('div', undefined, `session ${s.parentID ? 'child' : ''}`), info = el('div', undefined, 'session-info');
-      info.append(el('p', `Computer ${i.host} · OpenCode instance PID ${i.pid ?? 'unknown'} · ${s.directory || i.directory || 'unknown path'}`, 'muted'), el('p', i.online ? display.activity : `Last activity: ${s.activity || 'Ready'}`, 'activity'), el('code', s.directory));
+      info.append(el('p', `Computer ${i.host} · OpenCode instance PID ${i.pid ?? 'unknown'}`, 'muted'));
        if (s.parentID) info.append(el('p', `Subagent of ${i.sessions.find(p => p.id === s.parentID)?.title || s.parentID}`, 'muted'));
        if (classification.childAttentionCount) info.append(el('p', `${classification.childAttentionCount} descendant session${classification.childAttentionCount === 1 ? '' : 's'} need attention`, 'attention-summary'));
         renderMetrics(info, s, i.online, i.sessions);
@@ -246,8 +256,8 @@ function render() {
         }
         activity.append(list);
       }
-      const state = el('div', undefined, 'session-state'), badge = el('span', display.label, `badge ${display.className}`); badge.title = display.detail;
-      state.append(badge, el('small', s.agent || (s.parentID ? 'subagent' : 'agent'))); row.append(info, state); card.append(row, activity);
+      const state = el('div', undefined, 'session-state');
+      state.append(el('small', s.agent || (s.parentID ? 'subagent' : 'agent'))); row.append(info, state); card.append(row, activity);
       if (i.git?.root && !s.parentID) {
         const details = el('details'); details.dataset.instance = i.instanceId; details.append(el('summary', gitSummary(i.git)));
         const grid = el('div', undefined, 'git-grid');
