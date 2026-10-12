@@ -909,6 +909,76 @@ test('existing attention states do not notify on initial load or after reconnect
   await expect.poll(() => page.evaluate(() => window.notificationCalls.length)).toBe(0);
 });
 
+test('groups hidden descendant notifications under one privacy-safe root alert', async ({ page }) => {
+  let polls = 0;
+  await page.addInitScript(() => {
+    window.notificationCalls = [];
+    window.Notification = class {
+      static permission = 'granted';
+      constructor(title, options) { window.notificationCalls.push({ title, options }); }
+    };
+  });
+  await installStateFixture(page, () => {
+    polls++;
+    const state = report('Build safely', 'busy');
+    const permissionChild = state.instances[0].sessions.find(session => session.id === 'child-alpha');
+    const errorChild = { id: 'error-child', parentID: 'root-alpha', title: 'Helper', status: 'busy' };
+    if (polls >= 2) {
+      permissionChild.status = 'waiting';
+      permissionChild.permissions = [{ id: 'private-id', type: 'bash', title: 'Run command', requestedAt: new Date().toISOString(), status: 'pending' }];
+      errorChild.status = 'error'; errorChild.errorCategory = 'timeout';
+    }
+    state.instances[0].sessions.push(errorChild);
+    return state;
+  });
+  await page.goto('/');
+  await expect(page.locator('.tree-title').filter({ hasText: 'Build safely' })).toBeVisible();
+  await page.getByText('Filter agents', { exact: true }).click();
+  await page.locator('#notifications').check();
+  await expect.poll(() => page.evaluate(() => window.notificationCalls.length)).toBe(1);
+  const notification = await page.evaluate(() => window.notificationCalls[0]);
+  expect(notification.title).toBe('Build safely needs attention');
+  expect(notification.options.body).toContain('Run command');
+  expect(notification.options.body).toContain('timeout');
+  expect(notification.options.body).not.toMatch(/private-id|\/|PRIVATE/);
+  await page.waitForTimeout(2200);
+  await expect.poll(() => page.evaluate(() => window.notificationCalls.length)).toBe(1);
+});
+
+test('uses Tauri native notifications when available and focuses the dashboard on action', async ({ page }) => {
+  let polls = 0;
+  await page.addInitScript(() => {
+    window.nativeNotifications = [];
+    window.nativeInvocations = [];
+    window.__TAURI__ = {
+      notification: {
+        isPermissionGranted: async () => true,
+        requestPermission: async () => 'granted',
+        sendNotification: notification => window.nativeNotifications.push(notification),
+        onAction: async callback => { window.nativeNotificationAction = callback; return () => {}; },
+      },
+      core: { invoke: async command => { window.nativeInvocations.push(command); } },
+    };
+  });
+  await installStateFixture(page, () => {
+    polls++;
+    const state = report();
+    const child = state.instances[0].sessions.find(session => session.id === 'child-alpha');
+    child.status = polls < 2 ? 'busy' : 'error';
+    child.errorCategory = polls < 2 ? undefined : 'provider';
+    return state;
+  });
+  await page.goto('/');
+  await page.getByText('Filter agents', { exact: true }).click();
+  await page.locator('#notifications').check();
+  await expect.poll(() => page.evaluate(() => window.nativeNotifications.length)).toBe(1);
+  const notification = await page.evaluate(() => window.nativeNotifications[0]);
+  expect(notification.title).toBe('Build dashboard needs attention');
+  expect(notification.body).toContain('Error · provider');
+  await page.evaluate(() => window.nativeNotificationAction());
+  await expect.poll(() => page.evaluate(() => window.nativeInvocations.includes('focus_dashboard'))).toBe(true);
+});
+
 test('execution timeline is collapsed, accessible, and retains state across polling', async ({ page }) => {
   await installStateFixture(page, () => {
     const state = report();

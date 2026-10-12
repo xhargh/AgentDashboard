@@ -11,9 +11,26 @@ fn update_tray_status(app: tauri::AppHandle, status: String) {
     }
 }
 
+#[tauri::command]
+fn focus_dashboard(app: tauri::AppHandle) {
+    focus_main_window(&app);
+}
+
+fn focus_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![update_tray_status])
+        .plugin(tauri_plugin_notification::init())
+        .invoke_handler(tauri::generate_handler![
+            update_tray_status,
+            focus_dashboard
+        ])
         .setup(|app| {
             let tray = TrayIconBuilder::with_id("main")
                 .icon(Image::new(include_bytes!("../icons/tray.rgba"), 32, 32))
@@ -29,9 +46,8 @@ fn main() {
                             if window.is_visible().unwrap_or(false) {
                                 let _ = window.hide();
                             } else {
-                                let _ = window.show();
-                                let _ = window.unminimize();
-                                let _ = window.set_focus();
+                                let app = tray.app_handle();
+                                focus_main_window(&app);
                             }
                         }
                     }

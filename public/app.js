@@ -2,6 +2,7 @@ import { buildSessionTree, classifySessions, compareSessions, isActiveCategory, 
 const $ = id => document.getElementById(id);
 let token = '', instances = [], revision = null, pending = false, authRequired = false;
 let notificationEnabled = false, initializedAttention = false;
+let nativeNotificationActionRegistered = false;
 const previousStatuses = new Map();
 const originalTitle = document.title;
 const numberFormat = new Intl.NumberFormat();
@@ -795,28 +796,116 @@ function render() {
   }
   reconcile($('fleet'), fleet);
 }
+function safeNotificationLabel(session) {
+  const title = typeof session.title === 'string' ? session.title.trim().replace(/\s+/g, ' ') : '';
+  if (!title || title.length > 80 || /[\\/]|https?:|\b(token|password|secret|credential|command|authorization)\b/i.test(title)) {
+    return session.parentID ? 'Subagent' : 'Agent';
+  }
+  return title;
+}
+function attentionReason(session, now = Date.now()) {
+  if (session.status === 'waiting') {
+    const pending = (session.permissions || []).filter(permission => permission.status === 'pending');
+    const preview = pending.slice(0, 2).map(permission => permission.title || permission.type).filter(Boolean).join(', ');
+    return { signature: `waiting:${pending.map(permission => permission.id || `${permission.type}:${permission.requestedAt}`).sort().join(',')}`,
+      reason: preview ? `Permission required · ${preview}` : 'Permission required · details unavailable' };
+  }
+  if (session.status === 'error') {
+    const category = session.errorCategory || 'unavailable';
+    return { signature: `error:${category}`, reason: `Error · ${category}` };
+  }
+  if (session.status === 'retry') {
+    const deadline = Date.parse(session.retry?.nextRetryAt);
+    const elapsed = Date.parse(session.stateChangedAt);
+    const scheduledLong = Number.isFinite(deadline) && deadline - now >= 60000;
+    const retryingLong = Number.isFinite(elapsed) && now - elapsed >= 60000;
+    if (scheduledLong) return { signature: 'retry:long', reason: `Retry scheduled for ${formatTimestamp(session.retry.nextRetryAt)}` };
+    if (retryingLong) return { signature: 'retry:long', reason: `Retrying for ${formatDuration(now - elapsed)}` };
+  }
+  return undefined;
+}
+function rootSessionFor(instance, session) {
+  let current = session, visited = new Set();
+  while (current.parentID && !visited.has(current.id)) {
+    visited.add(current.id);
+    const parent = instance.sessions.find(candidate => candidate.id === current.parentID);
+    if (!parent) break;
+    current = parent;
+  }
+  return current;
+}
+async function dispatchAttentionNotification(title, body, tag) {
+  if (!notificationEnabled) return;
+  const tauriNotification = globalThis.__TAURI__?.notification;
+  if (tauriNotification?.sendNotification && tauriNotification?.isPermissionGranted) {
+    try {
+      let granted = await tauriNotification.isPermissionGranted();
+      if (!granted) granted = (await tauriNotification.requestPermission()) === 'granted';
+      if (granted) { registerNativeNotificationActions(); tauriNotification.sendNotification({ title, body }); }
+      return;
+    } catch { return; }
+  }
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    const notification = new Notification(title, { body, tag });
+    notification.onclick = () => { focusDashboard(); notification.close(); };
+  } catch {}
+}
+function focusDashboard() {
+  const invoke = globalThis.__TAURI__?.core?.invoke;
+  if (invoke) void invoke('focus_dashboard').catch(() => {});
+  else { window.focus(); $('main')?.focus?.(); }
+}
+async function requestNotificationPermission() {
+  const native = globalThis.__TAURI__?.notification;
+  if (native?.isPermissionGranted && native?.requestPermission) {
+    try {
+      let granted = await native.isPermissionGranted();
+      if (!granted) granted = (await native.requestPermission()) === 'granted';
+      return Boolean(granted);
+    } catch { return false; }
+  }
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'default') return (await Notification.requestPermission()) === 'granted';
+  return Notification.permission === 'granted';
+}
+function registerNativeNotificationActions() {
+  const onAction = globalThis.__TAURI__?.notification?.onAction;
+  if (onAction && !nativeNotificationActionRegistered) {
+    nativeNotificationActionRegistered = true;
+    void onAction(() => focusDashboard()).catch(() => { nativeNotificationActionRegistered = false; });
+  }
+}
 function updateAttentionNotifications(nextInstances) {
-  const live = nextInstances.filter(i => i.online);
   let count = 0;
-  const currentStatuses = new Map();
-  for (const instance of live) {
+  const currentStatuses = new Map(), retained = new Set(), alertsByRoot = new Map();
+  for (const instance of nextInstances) {
     for (const session of instance.sessions) {
       const identity = `${instance.instanceId}:${session.id}`;
-      currentStatuses.set(identity, session.status);
-      const attention = session.status === 'waiting' || session.status === 'error';
+      retained.add(identity);
+      if (!instance.online) continue;
+      const attention = session.status === 'waiting' || session.status === 'error' || Boolean(attentionReason(session));
       if (attention) count++;
+      const notice = attentionReason(session);
+      if (!notice) { currentStatuses.set(identity, `status:${session.status}`); continue; }
+      currentStatuses.set(identity, notice.signature);
       const previous = previousStatuses.get(identity);
-      if (initializedAttention && attention && previous !== undefined && previous !== session.status) {
-        if (notificationEnabled && 'Notification' in window && Notification.permission === 'granted') {
-          try { new Notification(session.status === 'waiting' ? 'Permission required' : 'Agent error', { body: `${session.title} · ${instance.host}` }); } catch {}
-        }
-      }
+      if (!initializedAttention || previous === notice.signature) continue;
+      const root = rootSessionFor(instance, session), rootIdentity = `${instance.instanceId}:${root.id}`;
+      if (!alertsByRoot.has(rootIdentity)) alertsByRoot.set(rootIdentity, { root, entries: new Map() });
+      alertsByRoot.get(rootIdentity).entries.set(identity, { session, reason: notice.reason });
     }
   }
-  previousStatuses.clear();
-  for (const [identity, status] of currentStatuses) previousStatuses.set(identity, status);
+  for (const identity of previousStatuses.keys()) if (!retained.has(identity)) previousStatuses.delete(identity);
+  for (const [identity, signature] of currentStatuses) previousStatuses.set(identity, signature);
   initializedAttention = true;
   if ($('tab-count')?.checked) document.title = count ? `(${count}) ${originalTitle}` : originalTitle;
+  for (const [rootIdentity, alert] of alertsByRoot) {
+    const entries = [...alert.entries.values()];
+    const body = entries.slice(0, 3).map(({ session, reason }) => `${safeNotificationLabel(session)}: ${reason}`).join(' · ');
+    const title = `${safeNotificationLabel(alert.root)} needs attention`;
+    void dispatchAttentionNotification(title, body, rootIdentity);
+  }
 }
 function updateTrayStatus(status) {
   const invoke = globalThis.__TAURI__?.core?.invoke;
@@ -850,7 +939,7 @@ async function poll() {
     $('connection').dataset.state = 'connected';
     const online = instances.filter(instance => instance.online);
     const sessions = online.flatMap(instance => instance.sessions || []);
-    const attention = sessions.filter(session => ['waiting', 'error'].includes(session.status)).length;
+    const attention = sessions.filter(session => attentionReason(session)).length;
     updateTrayStatus(`AgentDashboard · ${online.length} instance${online.length === 1 ? '' : 's'} · ${sessions.length} sessions${attention ? ` · ${attention} need attention` : ''}`);
     document.querySelectorAll('details[data-instance]').forEach(n => n.open = open.has(n.dataset.instance));
   } catch (e) { revision = null; initializedAttention = false; previousStatuses.clear(); $('connection').textContent = '○ Disconnected · retrying'; $('connection').dataset.state = 'disconnected'; $('error').textContent = e.message; updateTrayStatus('AgentDashboard · Disconnected'); if (!$('dashboard').hidden) { instances = instances.map(i => ({ ...i, online: false })); render(); } }
@@ -864,16 +953,21 @@ $('sort-direction').addEventListener('click', () => { sortDirection = sortDirect
 $('notifications').addEventListener('change', async event => {
   notificationEnabled = event.target.checked;
   if (!notificationEnabled) return;
-  if (!('Notification' in window)) { event.target.checked = false; notificationEnabled = false; $('notifications-help').textContent = 'Browser notifications are not supported in this browser.'; return; }
-  if (Notification.permission === 'default') {
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') { event.target.checked = false; notificationEnabled = false; }
-  } else if (Notification.permission !== 'granted') { event.target.checked = false; notificationEnabled = false; }
+  const native = globalThis.__TAURI__?.notification;
+  if (!native?.sendNotification && !('Notification' in window)) {
+    event.target.checked = false; notificationEnabled = false;
+    $('notifications-help').textContent = 'Notifications are not supported in this browser or desktop webview.';
+    return;
+  }
+  if (!await requestNotificationPermission()) {
+    event.target.checked = false; notificationEnabled = false;
+    $('notifications-help').textContent = 'Notification permission was not granted.';
+  } else if (native?.sendNotification) registerNativeNotificationActions();
 });
 $('tab-count').addEventListener('change', () => {
   if (!$('tab-count').checked) document.title = originalTitle;
   else {
-    const count = instances.filter(i => i.online).flatMap(i => i.sessions).filter(s => s.status === 'waiting' || s.status === 'error').length;
+    const count = instances.filter(i => i.online).flatMap(i => i.sessions).filter(s => attentionReason(s)).length;
     document.title = count ? `(${count}) ${originalTitle}` : originalTitle;
   }
 });
