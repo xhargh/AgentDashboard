@@ -4,9 +4,15 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
-const assets = new Map(await Promise.all(['index.html', 'app.js', 'session-state.js', 'style.css'].map(async name =>
+const publicAssets = ['index.html', 'app.js', 'session-state.js', 'style.css',
+  'icons/icon.svg', 'icons/favicon.ico', 'icons/favicon-16x16.png', 'icons/favicon-32x32.png',
+  'icons/apple-touch-icon.png', 'icons/site.webmanifest', 'icons/android-chrome-192x192.png',
+  'icons/android-chrome-512x512.png'];
+const mimeTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml',
+  '.ico': 'image/vnd.microsoft.icon', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
+const assets = new Map(await Promise.all(publicAssets.map(async name =>
   ['/' + (name === 'index.html' ? '' : name), { body: await readFile(new URL('../public/' + name, import.meta.url)),
-    type: name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html' }])));
+    type: mimeTypes[name.slice(name.lastIndexOf('.'))] }])));
 function equal(a, b) { const x = Buffer.from(a || ''), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); }
 const LIMITS = Object.freeze({ instances: 2000, sessionsPerReport: 1000, sessionsTotal: 20000,
   eventsPerReport: 200, eventsTotal: 10000, field: 4096, summary: 200, pruneInterval: 60000 });
