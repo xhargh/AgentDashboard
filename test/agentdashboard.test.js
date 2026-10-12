@@ -99,8 +99,9 @@ test('reports assistant model metadata per session and filters it at the outboun
   ] } }) } };
   const plugin = await AgentDashboardPlugin({ directory: '/tmp', client });
   t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
+  const sourceMessageAt = Date.now();
   await plugin.event({ event: { type: 'message.updated', properties: { info: {
-    id: 'message-1', sessionID: 'parent', role: 'assistant', time: { created: 1, completed: 2 }, parentID: 'root',
+    id: 'message-1', sessionID: 'parent', role: 'assistant', time: { created: sourceMessageAt, completed: sourceMessageAt + 1 }, parentID: 'root',
     providerID: 'provider-a', modelID: 'model-x', mode: 'build', path: { cwd: '/tmp', root: '/tmp' }, cost: 0,
     tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 1, write: 0 } }, finish: 'stop',
   } } } });
@@ -114,6 +115,8 @@ test('reports assistant model metadata per session and filters it at the outboun
     providerID: 'provider-a', modelID: 'model-x', providerName: 'Provider A', name: 'Friendly Model', contextLimit: 128000,
   });
   assert.deepEqual(sessions.find(s => s.id === 'child').model, { providerID: 'provider-b', modelID: 'model-z' });
+  assert.deepEqual(reports.at(-1).events.filter(event => event.kind === 'modelSnapshot').map(event => [event.sessionId, event.messageId]),
+    [['parent', 'message-1'], ['child', 'message-2']]);
   await plugin.event({ event: { type: 'message.updated', properties: { info: {
     id: 'message-3', sessionID: 'parent', role: 'assistant', providerID: 'provider-b', modelID: 'model-y',
   } } } });
@@ -124,6 +127,8 @@ test('reports assistant model metadata per session and filters it at the outboun
   });
   assert.deepEqual(switched.find(s => s.id === 'child').model, { providerID: 'provider-b', modelID: 'model-z' },
     'one session model switch does not overwrite another session metadata');
+  assert.deepEqual(reports.at(-1).events.filter(event => event.kind === 'modelSnapshot' && event.sessionId === 'parent').map(event => event.messageId),
+    ['message-1', 'message-3']);
 
   process.env.AGENTDASHBOARD_TELEMETRY = '{"modelMetrics":false}';
   const filtered = await AgentDashboardPlugin({ directory: '/tmp', client });
@@ -133,6 +138,7 @@ test('reports assistant model metadata per session and filters it at the outboun
   } } } });
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(!JSON.stringify(reports.at(-1)).includes('private-provider'));
+  assert.ok(!reports.at(-1).events?.some(event => event.kind === 'modelSnapshot'));
 
   process.env.AGENTDASHBOARD_TELEMETRY = '{"profile":"status-only"}';
   const statusOnly = await AgentDashboardPlugin({ directory: '/tmp', client });

@@ -192,6 +192,9 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
 .file-changes-summary { width: fit-content; color: var(--muted); font-size: 11px; cursor: pointer; }
 .file-change-list { margin: 7px 0; padding-left: 20px; color: var(--text); font-size: 11px; }
 .unassigned-changes { margin-top: 6px !important; color: var(--muted); font-size: 11px; }
+.model-history { padding: 10px 24px; border-top: 1px solid var(--line); }
+.model-history-summary { width: fit-content; color: var(--muted); font-size: 11px; cursor: pointer; }
+.model-history-list { margin: 7px 0; padding-left: 20px; color: var(--text); font-size: 11px; }
 .timeline-list { margin: 8px 0; padding-left: 24px; color: var(--muted); font-size: 11px; }
 .timeline-list li { padding: 2px 0; }
 .execution-timeline:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }

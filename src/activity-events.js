@@ -7,20 +7,21 @@ const summaries = {
   created: 'Session created', busy: 'Agent started working', idle: 'Agent became idle',
   waiting: 'Permission requested', error: 'Agent encountered an error', retry: 'Agent retrying',
   permissionAnswered: 'Permission answered', deleted: 'Session ended', toolActivity: 'Tool activity', fileChange: 'File change',
+  modelSnapshot: 'Model observation',
 };
 const phases = {
   created: 'lifecycle', busy: 'working', idle: 'idle', waiting: 'permission',
-  error: 'error', retry: 'retry', permissionAnswered: 'permission', deleted: 'lifecycle', toolActivity: 'tool', fileChange: 'files',
+  error: 'error', retry: 'retry', permissionAnswered: 'permission', deleted: 'lifecycle', toolActivity: 'tool', fileChange: 'files', modelSnapshot: 'model',
 };
 const outcomes = { error: 'failure', deleted: 'completed' };
-const safeAttributeKeys = new Set(['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory', 'fileKey', 'path', 'additions', 'deletions', 'changeType', 'snapshotId']);
+const safeAttributeKeys = new Set(['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'variant', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory', 'fileKey', 'path', 'additions', 'deletions', 'changeType', 'snapshotId']);
 
 function safeAttributes(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const result = {};
   for (const [key, item] of Object.entries(value)) {
     if (!safeAttributeKeys.has(key)) continue;
-    if ((typeof item === 'string' && item.length <= (key === 'path' ? 4096 : 100)) || (Number.isSafeInteger(item) && item >= 0)) result[key] = item;
+    if ((typeof item === 'string' && item.length <= (key === 'path' ? 4096 : ['providerId', 'modelId', 'variant'].includes(key) ? 200 : 100)) || (Number.isSafeInteger(item) && item >= 0)) result[key] = item;
   }
   return Object.keys(result).length ? result : undefined;
 }
@@ -38,7 +39,7 @@ export function normalizeObservabilityEvent({ instanceId = 'legacy', sessionId, 
     sessionId,
     timestamp,
     kind,
-    phase: ['lifecycle', 'working', 'idle', 'permission', 'error', 'retry', 'tool', 'files'].includes(context.phase) ? context.phase : phases[kind],
+    phase: ['lifecycle', 'working', 'idle', 'permission', 'error', 'retry', 'tool', 'files', 'model'].includes(context.phase) ? context.phase : phases[kind],
     source: context.source === 'inferred' ? 'inferred' : 'observed',
     timestampSource: context.timestampSource === 'source' ? 'source' : 'observed',
     summary: summaries[kind],

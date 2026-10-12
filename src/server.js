@@ -35,7 +35,7 @@ function validUsage(usage) {
 function validTimestamp(value) { return value === null || boundedString(value, 40) && Number.isFinite(Date.parse(value)); }
 function validObservabilityEvent(event, reportInstanceId) {
   if (!event || !boundedString(event.sessionId, 200) || !boundedString(event.timestamp, 40) || !Number.isFinite(Date.parse(event.timestamp)) ||
-      !['created','busy','idle','waiting','error','retry','permissionAnswered','deleted','toolActivity','fileChange'].includes(event.kind) || !boundedString(event.summary, LIMITS.summary)) return false;
+      !['created','busy','idle','waiting','error','retry','permissionAnswered','deleted','toolActivity','fileChange','modelSnapshot'].includes(event.kind) || !boundedString(event.summary, LIMITS.summary)) return false;
   if (event.schemaVersion === undefined) return true;
   const attributes = event.attributes;
   return event.schemaVersion === 1 && boundedString(event.id, 200) && boundedString(event.instanceId, 100) &&
@@ -44,12 +44,12 @@ function validObservabilityEvent(event, reportInstanceId) {
     (event.parentSessionId === undefined || boundedString(event.parentSessionId, 200)) &&
     (event.messageId === undefined || boundedString(event.messageId, 200)) &&
     (event.toolCallId === undefined || boundedString(event.toolCallId, 200)) &&
-    ['lifecycle', 'working', 'idle', 'permission', 'error', 'retry', 'tool', 'files'].includes(event.phase) &&
+    ['lifecycle', 'working', 'idle', 'permission', 'error', 'retry', 'tool', 'files', 'model'].includes(event.phase) &&
     ['observed', 'inferred'].includes(event.source) &&
     (event.outcome === undefined || ['started', 'completed', 'failure', 'cancelled'].includes(event.outcome)) &&
     (attributes === undefined || attributes && typeof attributes === 'object' && !Array.isArray(attributes) &&
-      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory', 'fileKey', 'path', 'additions', 'deletions', 'changeType', 'snapshotId'].includes(key) &&
-        (boundedString(value, key === 'path' ? 4096 : 100) || Number.isSafeInteger(value) && value >= 0) &&
+      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'variant', 'permissionType', 'permissionTitle', 'permissionId', 'nextRetryAt', 'errorCategory', 'fileKey', 'path', 'additions', 'deletions', 'changeType', 'snapshotId'].includes(key) &&
+        (boundedString(value, key === 'path' ? 4096 : ['providerId', 'modelId', 'variant'].includes(key) ? 200 : 100) || Number.isSafeInteger(value) && value >= 0) &&
         (key !== 'toolStatus' || ['pending', 'running', 'completed', 'error'].includes(value)) &&
         (key !== 'errorCategory' || ['timeout', 'permission', 'cancelled', 'rate-limit', 'provider', 'tool', 'unknown'].includes(value)) &&
         (key !== 'permissionType' || ['read', 'write', 'edit', 'bash', 'webfetch', 'external_directory', 'doom_loop', 'task', 'unknown'].includes(value)) &&

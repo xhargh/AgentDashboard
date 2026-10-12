@@ -145,6 +145,26 @@ function sessionFileChanges(instance, sessionId) {
     historyPartial: Boolean(instance.eventsPartial),
   };
 }
+function modelTransitions(instance, sessionId) {
+  const seen = new Set();
+  const snapshots = (Array.isArray(instance.events) ? instance.events : []).filter(event => {
+    if (event?.sessionId !== sessionId || event.kind !== 'modelSnapshot' || !event.attributes?.providerId || !event.attributes?.modelId || !Number.isFinite(Date.parse(event.timestamp))) return false;
+    const key = event.id || event.messageId;
+    if (key && seen.has(key)) return false;
+    if (key) seen.add(key);
+    return true;
+  }).sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  const transitions = [];
+  let previous;
+  for (const event of snapshots) {
+    const model = { providerId: event.attributes.providerId, modelId: event.attributes.modelId, variant: event.attributes.variant };
+    if (previous && (previous.providerId !== model.providerId || previous.modelId !== model.modelId || previous.variant !== model.variant)) {
+      transitions.push({ previous, next: model, timestamp: event.timestamp, timestampSource: event.timestampSource });
+    }
+    previous = model;
+  }
+  return transitions;
+}
 function formatDuration(milliseconds) {
   return milliseconds < 1000 ? `${Math.round(milliseconds)} ms`
     : milliseconds < 60000 ? `${(milliseconds / 1000).toFixed(1)} s` : `${(milliseconds / 60000).toFixed(1)} min`;
@@ -577,6 +597,20 @@ function render() {
       state.append(el('small', s.agent || (s.parentID ? 'subagent' : 'agent'))); row.append(info, state); card.append(row, activity);
       if (toolDetails) card.append(toolDetails);
       if (fileDetails) card.append(fileDetails);
+      const changes = modelTransitions(i, s.id);
+      if (changes.length) {
+        const modelDetails = el('details', undefined, 'model-history');
+        modelDetails.append(el('summary', `Model changes · ${changes.length}${i.eventsPartial ? ' · history partial' : ''}`, 'model-history-summary'));
+        if (i.eventsPartial) modelDetails.append(el('p', 'Earlier model transitions may be unavailable.', 'timeline-message'));
+        const list = el('ol', undefined, 'model-history-list');
+        for (const change of changes) {
+          const previous = `${change.previous.providerId}/${change.previous.modelId}${change.previous.variant ? ` · ${change.previous.variant}` : ''}`;
+          const next = `${change.next.providerId}/${change.next.modelId}${change.next.variant ? ` · ${change.next.variant}` : ''}`;
+          const time = change.timestampSource === 'source' ? formatTimestamp(change.timestamp) : `observed ${formatTimestamp(change.timestamp)}`;
+          list.append(el('li', `${previous} → ${next} · ${time}`));
+        }
+        modelDetails.append(list); card.append(modelDetails);
+      }
       if (i.git?.root && !s.parentID) {
         const details = el('details'); details.dataset.instance = i.instanceId; details.append(el('summary', gitSummary(i.git)));
         const grid = el('div', undefined, 'git-grid');
