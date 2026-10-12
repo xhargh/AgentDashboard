@@ -156,6 +156,18 @@ test('validates optional model metadata while accepting legacy sessions', async 
   delete value.sessions[0].usage;
   assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 200);
 });
+test('accepts older reports and validates optional bounded timeline payloads', async t => {
+  const { request } = await start(t);
+  const value = report();
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 200);
+  value.timeline = { partial: true, intervals: [{ sessionId: 'parent', startAt: '2026-10-12T00:00:00Z', endAt: null, status: 'busy' }] };
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 200);
+  value.timeline.intervals[0].status = 'private-prompt';
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 400);
+  value.timeline.intervals[0].status = 'busy';
+  value.timeline.intervals[0].startAt = null;
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 400);
+});
 test('tracks bounded idempotent usage per session and keeps latest context separate', async t => {
   const originalFetch = globalThis.fetch;
   const keys = ['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'AGENTDASHBOARD_TELEMETRY', 'XDG_CONFIG_HOME'];

@@ -147,6 +147,26 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
 .subagent-row > summary .tree-activity, .subagent-row > summary .tree-directory { display: none; }
 .subagent-row[open] > .session-card { border-radius: 0 0 7px 7px; }
 .subagent-row .session { padding: 14px 16px; }
+.execution-timeline { margin: 0; padding: 0 18px 12px; border: 1px solid var(--line); border-top: 0; background: var(--surface); }
+.execution-heading { padding: 12px 0; color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; }
+.timeline-chart { min-width: 520px; padding: 8px 0; }
+.execution-timeline[open] { overflow-x: auto; }
+.timeline-row { display: grid; grid-template-columns: minmax(90px, 150px) minmax(360px, 1fr); gap: 10px; align-items: center; margin: 6px 0; }
+.timeline-session { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.timeline-track { position: relative; height: 20px; border-bottom: 1px solid var(--line); }
+.timeline-now { position: absolute; z-index: 1; top: 0; height: 20px; border-left: 1px dashed var(--text); }
+.timeline-interval { position: absolute; top: 2px; min-width: 4px; height: 14px; overflow: hidden; border-radius: 3px; color: #101413; text-align: center; font-size: 9px; line-height: 14px; }
+.timeline-busy { background: #79c99b; }
+.timeline-idle { background: #8293a0; }
+.timeline-waiting { background: #e8bc63; }
+.timeline-retry { background: #bc91e8; }
+.timeline-error { background: #eb7777; }
+.timeline-legend, .timeline-message { color: var(--muted); font-size: 11px; }
+.timeline-list { margin: 8px 0; padding-left: 24px; color: var(--muted); font-size: 11px; }
+.timeline-list li { padding: 2px 0; }
+.execution-timeline:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 600px) { .execution-timeline { padding-right: 10px; padding-left: 10px; } .timeline-row { grid-template-columns: 90px minmax(360px, 1fr); } }
+@media (prefers-reduced-motion: reduce) { .timeline-interval { transition: none; } }
 .todos { list-style: none; padding: 12px 0 0; margin: 14px 0 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .todos li { padding: 3px 0; overflow-wrap: anywhere; }
 .instance-warning { margin: 0; padding: 12px 24px; border-bottom: 1px solid #51432f; background: #30291e; color: var(--warning); font-size: 11px; overflow-wrap: anywhere; }

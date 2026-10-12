@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createSession, markActivity, markState } from './session-lifecycle.js';
 import { createActivityBuffer } from './activity-events.js';
+import { buildExecutionTimeline } from './execution-timeline.js';
 const exec = promisify(execFile);
 
 const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics'];
@@ -65,7 +66,7 @@ function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
   if (!categories.paths) categories.git = false;
   return categories;
 }
-function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events }, privacy) {
+function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events, timeline }, privacy) {
   const report = { instanceId, machineId, generationStartedAt, host, pid, sessions: sessions.map(session => {
     const result = { id: session.id, status: session.status };
     if (session.parentID) result.parentID = session.parentID;
@@ -81,6 +82,7 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
     return result;
   }) };
   if (events?.length) report.events = events;
+  if (timeline) report.timeline = timeline;
   if (privacy.paths) { report.directory = directory; report.worktree = worktree; }
   if (privacy.git) report.git = git;
   return report;
@@ -205,7 +207,8 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
       const response = await fetch(new URL('/api/report', endpoint), {
         method: 'POST', redirect: 'error', headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'content-type': 'application/json' },
         body: JSON.stringify(privateReport({ instanceId, machineId: machine, generationStartedAt, host: process.env.AGENTDASHBOARD_HOST || hostname(), pid: process.pid,
-          directory, worktree, sessions: [...sessions.values()], git: gitInfo, events: activityEvents.snapshot() }, privacy)), signal: AbortSignal.timeout(3000),
+          directory, worktree, sessions: [...sessions.values()], git: gitInfo, events: activityEvents.snapshot(),
+          timeline: buildExecutionTimeline(activityEvents.snapshot(), [...sessions.values()], activityEvents.truncated) }, privacy)), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {
         await response.body?.cancel();

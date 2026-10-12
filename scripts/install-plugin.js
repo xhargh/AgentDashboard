@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const dependencies = [
   { name: 'session-lifecycle.js', import: "import { createSession, markActivity, markState } from './session-lifecycle.js';" },
   { name: 'activity-events.js', import: "import { createActivityBuffer } from './activity-events.js';" },
+  { name: 'execution-timeline.js', import: "import { buildExecutionTimeline } from './execution-timeline.js';" },
 ];
 
 export async function installPlugin(projectDirectory) {
@@ -13,7 +14,7 @@ export async function installPlugin(projectDirectory) {
     ? resolve(projectDirectory, '.opencode/plugins')
     : join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'opencode/plugins');
   await mkdir(destination, { recursive: true });
-  for (const stale of ['supervisor.js', 'session-lifecycle.js', 'activity-events.js', 'session-lifecycle.mjs', 'activity-events.mjs']) {
+  for (const stale of ['supervisor.js', 'session-lifecycle.js', 'activity-events.js', 'execution-timeline.js', 'session-lifecycle.mjs', 'activity-events.mjs', 'execution-timeline.mjs']) {
     await unlink(join(destination, stale)).catch(error => { if (error.code !== 'ENOENT') throw error; });
   }
 

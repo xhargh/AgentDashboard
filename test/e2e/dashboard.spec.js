@@ -739,3 +739,36 @@ test('existing attention states do not notify on initial load or after reconnect
   await page.locator('#notifications').check();
   await expect.poll(() => page.evaluate(() => window.notificationCalls.length)).toBe(0);
 });
+
+test('execution timeline is collapsed, accessible, and retains state across polling', async ({ page }) => {
+  await installStateFixture(page, () => {
+    const state = report();
+    state.instances[0].timeline = { partial: true, intervals: [
+      { sessionId: 'root-alpha', startAt: '2026-10-12T10:00:00Z', endAt: '2026-10-12T10:00:05Z', status: 'busy' },
+      { sessionId: 'child-alpha', startAt: '2026-10-12T10:00:02Z', endAt: null, status: 'waiting' },
+    ] };
+    return state;
+  });
+  await page.goto('/');
+  await page.setViewportSize({ width: 375, height: 800 });
+  const root = page.locator('.agent-tree').filter({ has: page.getByText('Build dashboard', { exact: true }) }).first();
+  await root.locator('> summary').click();
+  const timeline = root.locator('.execution-timeline');
+  await expect(timeline).toBeVisible();
+  await expect(timeline.locator('> summary')).toHaveText('Execution timeline');
+  await expect(timeline).not.toHaveAttribute('open', '');
+  await timeline.locator('> summary').click();
+  await expect(timeline).toHaveAttribute('open', '');
+  await expect(timeline.locator('ol')).toContainText('busy');
+  await expect(timeline.locator('ol')).toContainText('waiting');
+  await expect(timeline).toContainText('Partial history');
+  await expect(timeline.locator('.timeline-chart')).toHaveAttribute('role', 'img');
+  expect(await timeline.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(true);
+  expect(await root.locator('.execution-timeline').evaluate(node => [...node.parentElement.children].indexOf(node)))
+    .toBeLessThan(await root.locator('.subagent-group').evaluate(node => [...node.parentElement.children].indexOf(node)));
+  await timeline.locator('> summary').click();
+  await expect(timeline).not.toHaveAttribute('open', '');
+  await page.waitForTimeout(2500);
+  await expect(timeline.locator('> summary')).toBeVisible();
+  await expect(timeline).not.toHaveAttribute('open', '');
+});
