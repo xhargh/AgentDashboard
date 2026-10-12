@@ -124,6 +124,13 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
 .group-needs-attention .session-card { border-color: #57452e; }
 .attention-summary { font-size: 11px; font-weight: 600; color: var(--warning); margin-top: 8px; }
 .retry-context, .error-context { margin-top: 6px !important; color: var(--warning); font-size: 11px; }
+.permission-details { margin-top: 10px; }
+.permission-summary { width: fit-content; color: var(--warning); font-size: 11px; font-weight: 600; cursor: pointer; }
+.permission-list { margin: 7px 0 0; padding-left: 18px; font-size: 11px; }
+.permission-item { padding: 3px 0; }
+.permission-item strong, .permission-item small { display: block; }
+.permission-item small { color: var(--muted); }
+.activity-detail { color: var(--muted); font-size: 10px; }
 .agent-tree { margin: 0 0 12px; min-width: 0; }
 .agent-tree > .session-card { margin-bottom: 0; }
 .agent-tree > summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 15px 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer; list-style: none; }

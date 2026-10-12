@@ -496,6 +496,38 @@ test('shows safe retry deadline and elapsed state plus a categorized error', asy
   await expect(child.locator('.error-context')).toHaveText('Last safe error category · timeout');
 });
 
+test('shows multiple safe permission requests and correlated outcomes on descendant cards', async ({ page }) => {
+  const now = Date.now();
+  await installStateFixture(page, () => {
+    const state = report('Permission review', 'idle', now);
+    const child = state.instances[0].sessions.find(session => session.id === 'child-alpha');
+    child.status = 'waiting';
+    child.permissions = [
+      { id: 'opaque-permission-1', type: 'bash', title: 'Run command', requestedAt: new Date(now - 60000).toISOString(), timestampSource: 'observed', status: 'pending' },
+      { id: 'opaque-permission-2', type: 'read', title: 'Read files', requestedAt: new Date(now - 120000).toISOString(), timestampSource: 'source', status: 'responded', resolution: 'rejected' },
+    ];
+    state.instances[0].events = [
+      { schemaVersion: 1, id: 'permission-ask', instanceId: 'instance-alpha', sessionId: 'child-alpha', timestamp: new Date(now - 60000).toISOString(), timestampSource: 'observed', kind: 'waiting', phase: 'permission', source: 'observed', summary: 'Permission requested', parentSessionId: 'root-alpha', attributes: { permissionId: 'opaque-permission-1', permissionType: 'bash', permissionTitle: 'Run command' } },
+      { schemaVersion: 1, id: 'permission-answer', instanceId: 'instance-alpha', sessionId: 'child-alpha', timestamp: new Date(now - 30000).toISOString(), timestampSource: 'observed', kind: 'permissionAnswered', phase: 'permission', source: 'observed', summary: 'Permission answered', parentSessionId: 'root-alpha', attributes: { permissionId: 'opaque-permission-2', permissionType: 'read', permissionTitle: 'Read files' } },
+    ];
+    return state;
+  });
+  await page.goto('/');
+  const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  await expect(root.locator(':scope > summary')).toContainText('Attention in this branch');
+  await root.locator(':scope > summary').click();
+  await root.locator(':scope > article.session-card > .subagent-group > summary').click();
+  const child = page.locator('[data-agent-key="instance-alpha:child-alpha"]');
+  await child.locator(':scope > summary').click();
+  const permissionDetails = child.locator('.permission-details');
+  await expect(permissionDetails.locator('> summary')).toHaveText('Permissions · 1 waiting');
+  await permissionDetails.locator('> summary').click();
+  await expect(permissionDetails.locator('li').first()).toContainText('Run command · bash');
+  await expect(permissionDetails.locator('li').first()).toContainText('Waiting · 1.0 min · request time observed locally');
+  await expect(permissionDetails.locator('li').nth(1)).toContainText('Responded · rejected');
+  await expect(child).not.toContainText('opaque-permission-1');
+});
+
 test('warns per instance when reports use legacy host-based identity', async ({ page }) => {
   const now = Date.now();
   await installStateFixture(page, () => ({ mode: 'local', serverTime: now, instances: [

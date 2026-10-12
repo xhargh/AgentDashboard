@@ -501,10 +501,20 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   await emit('message.part.updated', { part: toolPart });
   const running = await waitFor(i => i?.sessions.some(s => s.id === 'child' && s.activity === 'bash: running'));
   assert.equal(running.sessions.find(s => s.id === 'child').parentID, 'root'); assert.ok(!JSON.stringify(running).includes('secret-value'));
-  await emit('permission.asked', { sessionID: 'child', permission: 'secret permission', metadata: { prompt: 'secret prompt' } });
-  const waiting = await waitFor(i => i?.sessions.find(s => s.id === 'child')?.status === 'waiting');
+  await emit('permission.asked', { sessionID: 'child', id: 'permission-1', type: 'bash', title: 'PRIVATE_COMMAND_TITLE', pattern: '/private/path', metadata: { prompt: 'secret prompt' } });
+  await emit('permission.updated', { sessionID: 'child', id: 'permission-1', type: 'bash', title: 'PRIVATE_COMMAND_TITLE', pattern: '/private/path', metadata: { prompt: 'secret prompt' } });
+  await emit('permission.asked', { sessionID: 'child', id: 'permission-2', type: 'read', pattern: '/another/private/path' });
+  const waiting = await waitFor(i => i?.sessions.find(s => s.id === 'child')?.status === 'waiting' && i.sessions.find(s => s.id === 'child').permissions?.length === 2);
   assert.ok(waiting.events.some(event => event.sessionId === 'child' && event.kind === 'waiting'));
   assert.ok(waiting.events.some(event => event.sessionId === 'root' && event.kind === 'created'));
+  const permission = waiting.sessions.find(s => s.id === 'child').permissions[0];
+  assert.equal(permission.id, 'permission-1');
+  assert.equal(permission.type, 'bash');
+  assert.equal(permission.title, 'Run command');
+  assert.equal(permission.status, 'pending');
+  assert.equal(waiting.events.filter(event => event.attributes?.permissionId === 'permission-1').length, 1, 'permission snapshot replay is idempotent');
+  assert.equal(waiting.sessions.find(s => s.id === 'child').permissions[1].type, 'read');
+  assert.equal(waiting.sessions.find(s => s.id === 'child').permissions[1].title, 'Read files');
   const toolEvents = waiting.events.filter(event => event.kind === 'toolActivity');
   assert.equal(toolEvents.length, 1, 'repeated running snapshots produce one event');
   assert.equal(toolEvents[0].schemaVersion, 1);
@@ -515,7 +525,16 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   assert.equal(toolEvents[0].timestampSource, 'source');
   assert.equal(toolEvents[0].attributes.toolName, 'bash');
   assert.equal(toolEvents[0].attributes.toolStatus, 'running');
-  assert.doesNotMatch(JSON.stringify(waiting.events), /secret permission|secret prompt|secret-value|command/);
+  assert.doesNotMatch(JSON.stringify(waiting), /PRIVATE_COMMAND_TITLE|\/private\/path|secret prompt|secret-value/);
+  await emit('permission.replied', { sessionID: 'child', id: 'permission-1', reply: 'reject', title: 'SECRET_REPLY_TITLE' });
+  const permissionPartiallyAnswered = await waitFor(i => i?.sessions.find(s => s.id === 'child')?.permissions?.[0]?.status === 'responded');
+  assert.equal(permissionPartiallyAnswered.sessions.find(s => s.id === 'child').status, 'waiting', 'one reply does not clear another outstanding permission');
+  assert.equal(permissionPartiallyAnswered.sessions.find(s => s.id === 'child').permissions[0].resolution, 'rejected');
+  await emit('permission.replied', { sessionID: 'child', id: 'permission-2', reply: 'once' });
+  const permissionAnswered = await waitFor(i => i?.sessions.find(s => s.id === 'child')?.permissions?.[1]?.status === 'responded');
+  assert.equal(permissionAnswered.sessions.find(s => s.id === 'child').permissions[1].resolution, 'approved');
+  assert.equal(permissionAnswered.sessions.find(s => s.id === 'child').status, 'busy');
+  assert.doesNotMatch(JSON.stringify(permissionAnswered), /SECRET_REPLY_TITLE/);
   await emit('message.part.updated', { part: { ...toolPart, state: { status: 'completed', time: { start: toolStartedAt, end: toolFinishedAt } } } });
   const completed = await waitFor(i => i?.events?.some(event => event.kind === 'toolActivity' && event.outcome === 'completed'));
   const finishedCall = completed.events.find(event => event.kind === 'toolActivity' && event.outcome === 'completed');
@@ -634,18 +653,27 @@ test('status-only telemetry strips metadata before transmission and validates se
   const plugin = await AgentDashboardPlugin({ directory: '/private/project', worktree: '/private/worktree', client: { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } } });
   t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/private/project' } } }));
   await plugin.event({ event: { type: 'session.created', properties: { info: { id: 'session', title: 'Secret title', directory: '/private/project' } } } });
+  await plugin.event({ event: { type: 'permission.asked', properties: {
+    sessionID: 'session', id: 'status-only-permission', type: 'bash', title: 'PRIVATE_TITLE', pattern: 'PRIVATE_COMMAND',
+  } } });
   await plugin.event({ event: { type: 'session.status', properties: { sessionID: 'session', status: { type: 'busy' } } } });
   await plugin.event({ event: { type: 'message.updated', properties: { info: { sessionID: 'session', role: 'assistant', id: 'message',
     providerID: 'private-provider', modelID: 'private-model', variant: 'private-variant', tokens: { input: 12, output: 3 } } } } });
-  for (let n = 0; n < 100 && !sent?.sessions?.length; n++) await new Promise(resolve => setTimeout(resolve, 20));
+  for (let n = 0; n < 100 && (!sent?.sessions?.length || sent.sessions[0].status !== 'busy' || sent.timeline?.intervals.length < 2); n++) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
   assert.equal(sent.sessions[0].id, 'session');
   assert.equal(sent.sessions[0].status, 'busy');
   assert.equal(sent.sessions[0].title, undefined);
   assert.equal(sent.sessions[0].directory, undefined);
   assert.equal(sent.sessions[0].model, undefined);
   assert.equal(sent.sessions[0].usage, undefined);
-  assert.deepEqual(sent.timeline.intervals.map(({ sessionId, status }) => [sessionId, status]), [['session', 'busy']]);
-  assert.equal(sent.timeline.partial, false);
+  assert.equal(sent.sessions[0].permissions, undefined);
+  assert.ok(!sent.events?.some(event => event.attributes?.permissionId));
+  assert.deepEqual(sent.events?.map(event => event.kind), ['created', 'waiting', 'busy']);
+  assert.doesNotMatch(JSON.stringify(sent), /PRIVATE_TITLE|PRIVATE_COMMAND/);
+  assert.deepEqual(sent.timeline.intervals.map(({ sessionId, status }) => [sessionId, status]), [['session', 'waiting']]);
+  assert.equal(sent.timeline.partial, true, 'same-millisecond transitions remain explicitly partial instead of receiving fabricated timestamps');
   assert.doesNotMatch(JSON.stringify(sent.timeline), /Secret title|private\/project|private-provider|private-model/);
   assert.equal(sent.directory, undefined);
   assert.equal(sent.git, undefined);
@@ -678,7 +706,7 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
 
   for (const [category, forbidden] of [
     ['titles', 'PRIVATE_TITLE'], ['tasks', 'PRIVATE_TASK'], ['toolActivity', 'PRIVATE_ACTIVITY'], ['modelMetrics', 'PRIVATE_MODEL'],
-    ['paths', root], ['git', 'PRIVATE_COMMIT'],
+    ['paths', root], ['git', 'PRIVATE_COMMIT'], ['permissionDetails', 'PRIVATE_PERMISSION_ID'],
   ]) {
     process.env.AGENTDASHBOARD_TELEMETRY = JSON.stringify({ [category]: false });
     const reports = [];
@@ -699,6 +727,11 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
       part: { sessionID: 'session', messageID: 'private-message', id: 'private-part', callID: 'private-call', type: 'tool', tool: 'PRIVATE_ACTIVITY', state: { status: 'running', input: { command: 'RAW_TOOL_ARGUMENT' }, output: 'RAW_TOOL_OUTPUT' } },
     } } });
     await plugin.event({ event: { type: 'todo.updated', properties: { sessionID: 'session', todos: [{ content: 'PRIVATE_TASK', status: 'pending' }] } } });
+    await plugin.event({ event: { type: 'permission.asked', properties: {
+      sessionID: 'session', id: 'PRIVATE_PERMISSION_ID', type: 'bash', title: 'PRIVATE_PERMISSION_TITLE',
+      pattern: '/private/command', metadata: { prompt: 'PRIVATE_PERMISSION_PROMPT' },
+    } } });
+    await plugin.event({ event: { type: 'session.status', properties: { sessionID: 'session', status: { type: 'busy' } } } });
     await plugin.event({ event: { type: 'message.updated', properties: { info: { sessionID: 'session', role: 'assistant', id: 'message',
       providerID: 'PRIVATE_MODEL', modelID: 'model', variant: 'variant', tokens: { input: 10, reasoning: 2 },
       content: 'RAW_PROMPT and PRIVATE_REASONING' } } } });
@@ -711,7 +744,14 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
     assert.ok(!payload.includes('RAW_TOOL_OUTPUT'));
     assert.ok(!payload.includes('RAW_PROMPT'));
     assert.ok(!payload.includes('PRIVATE_REASONING'));
+    assert.ok(!payload.includes('PRIVATE_PERMISSION_TITLE'));
+    assert.ok(!payload.includes('PRIVATE_PERMISSION_PROMPT'));
+    assert.ok(!payload.includes('/private/command'));
     if (category === 'toolActivity') assert.ok(!sent.events?.some(event => event.kind === 'toolActivity'));
+    if (category === 'permissionDetails') {
+      assert.equal(sent.sessions[0].permissions, undefined);
+      assert.ok(!sent.events?.some(event => event.attributes?.permissionId));
+    } else assert.equal(sent.sessions[0].permissions?.[0]?.title, 'Run command');
     assert.equal(sent.sessions[0].id, 'session');
     assert.equal(sent.sessions[0].status, 'busy');
     if (category === 'paths') {
