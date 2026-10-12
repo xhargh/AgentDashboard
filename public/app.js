@@ -510,6 +510,8 @@ function render() {
   let hiddenOffline = 0;
   for (const i of instances.filter(i => !selected || machineKey(i) === selected || i.host === selected).sort((a, b) => Number(b.online) - Number(a.online) || a.host.localeCompare(b.host))) {
     if ($('hide-offline').checked && !i.online) { hiddenOffline++; continue; }
+    const workspaceRootId = i.sessions.find(session => !session.parentID && i.sessions.some(child => child.parentID === session.id))?.id
+      || i.sessions.find(session => !session.parentID)?.id;
     const eligible = new Set();
     for (const s of i.sessions) {
       const classification = classificationsFor(i).get(s.id);
@@ -731,6 +733,23 @@ function render() {
         const grid = el('div', undefined, 'git-grid');
         for (const [key, label] of [['status', 'Status'], ['log', 'Recent commits'], ['worktrees', 'Worktrees']]) { const block = el('section'); block.append(el('h4', label), el('pre', typeof i.git[key] === 'string' ? i.git[key] || 'Clean / empty' : 'Waiting for Git snapshot')); grid.append(block); }
         details.append(grid); card.append(details);
+      }
+      if (!s.parentID && s.id === workspaceRootId && i.mcpHealth) {
+        const health = i.mcpHealth, servers = Array.isArray(health.servers) ? health.servers : [];
+        const healthDetails = el('details', undefined, 'mcp-health');
+        let summary = health.status === 'unsupported' ? 'Workspace MCP status unavailable in this SDK'
+          : health.status === 'unavailable' ? 'Workspace MCP status temporarily unavailable'
+            : servers.length ? `Workspace MCP servers · ${servers.filter(server => server.state === 'connected').length} connected · ${servers.filter(server => server.state === 'failed').length} failed · ${servers.filter(server => server.state === 'auth-required').length} auth required`
+              : 'Workspace MCP servers · none reported';
+        if (health.partial) summary += ' · partial';
+        healthDetails.append(el('summary', summary, 'mcp-health-summary'));
+        const list = el('ul', undefined, 'mcp-health-list');
+        for (const server of servers) {
+          const change = server.lastTransitionAt ? ` · last observed ${formatTimestamp(server.lastTransitionAt)}` : '';
+          list.append(el('li', `${server.name} · ${server.state}${change}`));
+        }
+        if (health.status === 'unavailable') healthDetails.append(el('p', 'The MCP status query failed; agent execution was not interrupted.', 'timeline-message'));
+        healthDetails.append(list); card.append(healthDetails);
       }
       if (!compact) card.append(renderExecutionTimeline(i, s));
       if (!compact && children.length) {

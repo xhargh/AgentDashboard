@@ -97,8 +97,14 @@ function validReport(v) {
        (s.restored === undefined || typeof s.restored === 'boolean') &&
       (s.parentID === undefined || boundedString(s.parentID, 200)) && (s.todos === undefined || Array.isArray(s.todos) && s.todos.length <= 200 &&
         s.todos.every(todo => todo && boundedString(todo.content) && boundedString(todo.status, 40)))) &&
-    (v.git === undefined || v.git && typeof v.git === 'object' && !Array.isArray(v.git) &&
-      Object.entries(v.git).every(([key, value]) => boundedString(key, 100) && (typeof value !== 'string' || boundedString(value)))) &&
+     (v.git === undefined || v.git && typeof v.git === 'object' && !Array.isArray(v.git) &&
+       Object.entries(v.git).every(([key, value]) => boundedString(key, 100) && (typeof value !== 'string' || boundedString(value)))) &&
+     (v.mcpHealth === undefined || v.mcpHealth && typeof v.mcpHealth === 'object' && !Array.isArray(v.mcpHealth) &&
+       typeof v.mcpHealth.available === 'boolean' && ['available', 'unsupported', 'unavailable'].includes(v.mcpHealth.status) &&
+       validTimestamp(v.mcpHealth.observedAt) && (v.mcpHealth.partial === undefined || typeof v.mcpHealth.partial === 'boolean') &&
+       Array.isArray(v.mcpHealth.servers) && v.mcpHealth.servers.length <= 100 && v.mcpHealth.servers.every(server => server &&
+         boundedString(server.name, 80) && ['connected', 'disconnected', 'auth-required', 'failed', 'unknown'].includes(server.state) &&
+         (server.lastTransitionAt === undefined || validTimestamp(server.lastTransitionAt)))) &&
      eventsValid && (v.timeline === undefined || validTimeline(v.timeline));
 }
 export function createServer({ token, now = Date.now } = {}) {

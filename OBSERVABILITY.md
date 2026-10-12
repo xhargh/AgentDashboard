@@ -26,6 +26,8 @@ The dashboard joins tool snapshots by session, message ID and call/part ID. It r
 
 File-change observations carry a one-way file key for de-duplication and only source-supplied addition/deletion counts. File paths are included only when `paths` telemetry is enabled; patch text and file contents are never included. Session diff snapshots replace the prior per-file snapshot in the dashboard projection, while later incremental edits are applied after that snapshot. Events without an owning session contribute only to the separately labeled unassigned workspace file count.
 
+MCP health is workspace-scoped rather than attributed to a session. Only sanitized server labels, normalized connection states and optional transition timestamps are sent under the `mcpHealth` privacy category. Endpoints, credentials and arbitrary SDK error payloads are discarded; missing SDK support and polling failures use explicit `unsupported`/`unavailable` states.
+
 Reports without `schemaVersion` continue to be accepted as legacy events. New consumers must tolerate absent optional IDs, attributes, and fields from older reports. Events are count/age bounded; pruning sets truncation metadata and timeline projections remain marked partial rather than asserting completeness.
 
 ## Privacy and transport
