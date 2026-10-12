@@ -103,18 +103,31 @@ function renderExecutionTimeline(instance, parent, eligible) {
   const relevant = rows.flatMap(row => row.intervals);
   details.append(el('summary', 'Execution timeline', 'execution-heading'));
   if (!relevant.length) {
-    details.append(el('p', instance.timeline ? 'No observed state transitions in the retained event history.' : 'Timeline unavailable: this report does not include timeline history.', 'timeline-message'));
+    const message = !instance.timeline
+      ? 'Timeline unavailable: this report does not include timeline history.'
+      : instance.timeline.partial
+        ? 'Partial history: no observed state transitions are available in the retained event history.'
+        : 'No observed state transitions in the retained event history.';
+    details.append(el('p', message, 'timeline-message'));
     return details;
   }
   const times = relevant.flatMap(item => [Date.parse(item.startAt), item.endAt ? Date.parse(item.endAt) : Date.now()]).filter(Number.isFinite);
   const min = Math.min(...times), max = Math.max(...times), span = Math.max(1, max - min);
   const chart = el('div', undefined, 'timeline-chart'); chart.setAttribute('role', 'img');
   chart.setAttribute('aria-label', 'Observed session states on a shared wall-clock time scale');
+  const axis = el('div', undefined, 'timeline-axis');
+  axis.append(el('span', formatTimestamp(min)), el('span', formatTimestamp(max)));
+  chart.append(axis);
   for (const row of rows) {
-    if (!row.intervals.length) continue;
     const line = el('div', undefined, 'timeline-row');
-    line.append(el('span', row.session.title || 'Session', 'timeline-session'));
+    const sessionLabel = `${row.session.title || 'Session'}${instance.online ? '' : ' · offline'}`;
+    line.append(el('span', sessionLabel, 'timeline-session'));
     const track = el('div', undefined, 'timeline-track');
+    if (!row.intervals.length) {
+      const unknown = el('span', 'Unknown · partial history', 'timeline-interval timeline-unknown');
+      unknown.style.left = '0'; unknown.style.width = '100%';
+      track.append(unknown);
+    }
     for (const item of row.intervals) {
       const start = Date.parse(item.startAt), end = item.endAt ? Date.parse(item.endAt) : Date.now();
       const block = el('span', item.status, `timeline-interval timeline-${item.status}`);
@@ -140,7 +153,7 @@ function renderExecutionTimeline(instance, parent, eligible) {
     list.append(el('li', text));
   }
   details.append(chart);
-  const legend = el('p', 'Working · Idle · Permission wait · Retry · Error', 'timeline-legend');
+  const legend = el('p', 'Working · Idle · Permission wait · Retry · Error · Offline · Unknown/partial', 'timeline-legend');
   details.append(legend, list);
   details.append(el('p', instance.timeline?.partial ? 'Partial history: earlier transitions may be missing or truncated.' : 'Intervals show observed event times; they do not represent compute time.', 'timeline-message'));
   return details;

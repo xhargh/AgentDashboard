@@ -747,6 +747,7 @@ test('execution timeline is collapsed, accessible, and retains state across poll
       { sessionId: 'root-alpha', startAt: '2026-10-12T10:00:00Z', endAt: '2026-10-12T10:00:05Z', status: 'busy' },
       { sessionId: 'child-alpha', startAt: '2026-10-12T10:00:02Z', endAt: null, status: 'waiting' },
     ] };
+    state.instances[0].sessions.push({ id: 'unknown-child', parentID: 'root-alpha', title: 'Unknown child', status: 'idle' });
     return state;
   });
   await page.goto('/');
@@ -761,6 +762,7 @@ test('execution timeline is collapsed, accessible, and retains state across poll
   await expect(timeline).toHaveAttribute('open', '');
   await expect(timeline.locator('ol')).toContainText('busy');
   await expect(timeline.locator('ol')).toContainText('waiting');
+  await expect(timeline.locator('.timeline-unknown').first()).toHaveText('Unknown · partial history');
   await expect(timeline).toContainText('Partial history');
   await expect(timeline.locator('.timeline-chart')).toHaveAttribute('role', 'img');
   expect(await timeline.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(true);

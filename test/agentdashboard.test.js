@@ -516,15 +516,19 @@ test('status-only telemetry strips metadata before transmission and validates se
   const plugin = await AgentDashboardPlugin({ directory: '/private/project', worktree: '/private/worktree', client: { session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) } } });
   t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/private/project' } } }));
   await plugin.event({ event: { type: 'session.created', properties: { info: { id: 'session', title: 'Secret title', directory: '/private/project' } } } });
+  await plugin.event({ event: { type: 'session.status', properties: { sessionID: 'session', status: { type: 'busy' } } } });
   await plugin.event({ event: { type: 'message.updated', properties: { info: { sessionID: 'session', role: 'assistant', id: 'message',
     providerID: 'private-provider', modelID: 'private-model', variant: 'private-variant', tokens: { input: 12, output: 3 } } } } });
   for (let n = 0; n < 100 && !sent?.sessions?.length; n++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(sent.sessions[0].id, 'session');
-  assert.equal(sent.sessions[0].status, 'idle');
+  assert.equal(sent.sessions[0].status, 'busy');
   assert.equal(sent.sessions[0].title, undefined);
   assert.equal(sent.sessions[0].directory, undefined);
   assert.equal(sent.sessions[0].model, undefined);
   assert.equal(sent.sessions[0].usage, undefined);
+  assert.deepEqual(sent.timeline.intervals.map(({ sessionId, status }) => [sessionId, status]), [['session', 'busy']]);
+  assert.equal(sent.timeline.partial, false);
+  assert.doesNotMatch(JSON.stringify(sent.timeline), /Secret title|private\/project|private-provider|private-model/);
   assert.equal(sent.directory, undefined);
   assert.equal(sent.git, undefined);
   assert.equal(sent.machineId.length > 0, true);

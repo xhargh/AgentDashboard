@@ -16,8 +16,13 @@ export function buildExecutionTimeline(events, sessions, truncated = false) {
     const history = grouped.get(session.id) || [];
     if (!history.length || history[0].kind !== 'created' || truncated) partial = true;
     let current;
+    let created = false;
     for (const event of history) {
-      if (event.kind === 'created') { current = undefined; continue; }
+      if (event.kind === 'created') {
+        if (created) { partial = true; continue; }
+        created = true;
+        continue;
+      }
       if (event.kind === 'deleted') {
         if (current) { current.endAt = event.timestamp; intervals.push(current); current = undefined; }
         continue;
@@ -27,6 +32,7 @@ export function buildExecutionTimeline(events, sessions, truncated = false) {
       if (current) {
         const priorAt = Date.parse(current.startAt), nextAt = Date.parse(event.timestamp);
         if (nextAt <= priorAt) { partial = true; continue; }
+        if (current.status === status) continue;
         current.endAt = event.timestamp;
         intervals.push(current);
       }

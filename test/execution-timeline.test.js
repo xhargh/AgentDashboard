@@ -28,3 +28,18 @@ test('keeps event-provided statuses and does not invent intervals from current s
   const result = buildExecutionTimeline([event('parent', 'created', '2026-10-12T00:00:00Z')], [{ ...session, status: 'busy' }]);
   assert.deepEqual(result.intervals, []);
 });
+
+test('duplicate creation and repeated status observations do not erase or split known intervals', () => {
+  const result = buildExecutionTimeline([
+    event('parent', 'created', '2026-10-12T00:00:00Z'),
+    event('parent', 'busy', '2026-10-12T00:00:01Z'),
+    event('parent', 'busy', '2026-10-12T00:00:02Z'),
+    event('parent', 'created', '2026-10-12T00:00:03Z'),
+    event('parent', 'idle', '2026-10-12T00:00:04Z'),
+  ], [session]);
+  assert.deepEqual(result.intervals, [
+    { sessionId: 'parent', startAt: '2026-10-12T00:00:01Z', endAt: '2026-10-12T00:00:04Z', status: 'busy' },
+    { sessionId: 'parent', startAt: '2026-10-12T00:00:04Z', endAt: null, status: 'idle' },
+  ]);
+  assert.equal(result.partial, true);
+});
