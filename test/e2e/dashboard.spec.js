@@ -747,6 +747,12 @@ test('existing attention states do not notify on initial load or after reconnect
 test('execution timeline is collapsed, accessible, and retains state across polling', async ({ page }) => {
   await installStateFixture(page, () => {
     const state = report();
+    state.instances[0].events = [
+      { schemaVersion: 1, id: 'call-start', instanceId: 'instance-alpha', sessionId: 'root-alpha', messageId: 'message-1', toolCallId: 'call-1', timestamp: '2026-10-12T10:00:01Z', timestampSource: 'source', kind: 'toolActivity', phase: 'tool', outcome: 'started', source: 'observed', summary: 'Tool activity', attributes: { toolName: 'bash' } },
+      { schemaVersion: 1, id: 'call-finish', instanceId: 'instance-alpha', sessionId: 'root-alpha', messageId: 'message-1', toolCallId: 'call-1', timestamp: '2026-10-12T10:00:04Z', timestampSource: 'source', kind: 'toolActivity', phase: 'tool', outcome: 'completed', source: 'observed', summary: 'Tool activity', attributes: { toolName: 'bash' } },
+      { schemaVersion: 1, id: 'call-running', instanceId: 'instance-alpha', sessionId: 'root-alpha', messageId: 'message-2', toolCallId: 'call-2', timestamp: '2026-10-12T10:00:05Z', timestampSource: 'observed', kind: 'toolActivity', phase: 'tool', outcome: 'started', source: 'observed', summary: 'Tool activity', attributes: { toolName: 'read' } },
+      { schemaVersion: 1, id: 'call-error', instanceId: 'instance-alpha', sessionId: 'root-alpha', messageId: 'message-3', toolCallId: 'call-3', timestamp: '2026-10-12T10:00:06Z', timestampSource: 'source', kind: 'toolActivity', phase: 'tool', outcome: 'failure', source: 'observed', summary: 'Tool activity', attributes: { toolName: 'edit' } },
+    ];
     state.instances[0].timeline = { partial: true, intervals: [
       { sessionId: 'root-alpha', startAt: '2026-10-12T10:00:00Z', endAt: '2026-10-12T10:00:05Z', status: 'busy' },
       { sessionId: 'root-alpha', startAt: '2026-10-12T10:00:05Z', endAt: null, status: 'idle' },
@@ -761,6 +767,16 @@ test('execution timeline is collapsed, accessible, and retains state across poll
   await page.setViewportSize({ width: 375, height: 800 });
   const root = page.locator('.agent-tree').filter({ has: page.getByText('Build dashboard', { exact: true }) }).first();
   await root.locator('> summary').click();
+  const toolDetails = root.locator('article.session-card > details.tool-spans');
+  await expect(toolDetails.locator('> summary')).toContainText('Tool calls · 3 · 1 failed · 1 active · recorded 3.0 s · partial');
+  await toolDetails.locator('> summary').click();
+  await expect(toolDetails.locator('.tool-span-list > li')).toHaveText([
+    'bash · Completed · 3.0 sstarted 2026-10-12 10:00 · ended 2026-10-12 10:00',
+    'read · Runningstart time unavailable · first observed 2026-10-12 10:00 · end time unavailable',
+    'edit · Failedstart time unavailable · ended 2026-10-12 10:00',
+  ]);
+  await expect(toolDetails.locator('.tool-category-summary')).toContainText('bash · 1 call · recorded 3.0 s');
+  await expect(toolDetails.locator('ol')).toContainText('start time unavailable');
   const timeline = root.locator('.execution-timeline');
   await expect(timeline).toBeVisible();
   await expect(timeline.locator('> summary')).toHaveText('Execution timeline');

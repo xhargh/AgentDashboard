@@ -13,13 +13,16 @@ Each normalized event contains:
 | `instanceId`, `sessionId` | OpenCode plugin generation and owning session. |
 | `parentSessionId` | Parent relationship when known. |
 | `timestamp` | SDK-provided fact time when available, otherwise the adapter's observation time. It is not reconstructed from status snapshots. |
+| `timestampSource` | `source` when the SDK supplied the timestamp; otherwise `observed`. Duration calculations use source timestamps only. |
 | `kind`, `phase`, `outcome` | Stable event kind and normalized lifecycle phase/result. |
 | `source` | `observed` for direct SDK/plugin observations; `inferred` is reserved for explicitly marked derivations. |
 | `messageId`, `toolCallId` | Optional correlation identifiers, included only when supplied by the source. |
 | `summary` | Fixed, allowlisted display text; raw SDK text is not copied here. |
 | `attributes` | Optional values from a small allowlist. Arbitrary payload keys and values are discarded. |
 
-Current mappings are `created → lifecycle`, `busy → working`, `idle → idle`, `waiting`/`permissionAnswered → permission`, `error → error`, `retry → retry`, `deleted → lifecycle`, and tool-part snapshots → `tool`. `error` has outcome `failure`; `deleted` has outcome `completed`; tool snapshots map running/completed/error to started/completed/failure. The tool snapshot is keyed by session, message, tool-call/part ID, and state so re-delivery is idempotent. Without source time, its timestamp means observation time, not a verified tool start or finish.
+Current mappings are `created → lifecycle`, `busy → working`, `idle → idle`, `waiting`/`permissionAnswered → permission`, `error → error`, `retry → retry`, `deleted → lifecycle`, and tool-part snapshots → `tool`. `error` has outcome `failure`; `deleted` has outcome `completed`; tool snapshots preserve pending/running state and map running/completed/error to started/completed/failure. The tool snapshot is keyed by session, message, tool-call/part ID, and state so re-delivery is idempotent. Without source time, its timestamp means observation time, not a verified tool start or finish; durations remain unavailable unless both endpoints have source timestamps.
+
+The dashboard joins tool snapshots by session, message ID and call/part ID. It reports durations only when both endpoint timestamps are source-provided. A running call with a known SDK start may show elapsed time so far (one minute or longer is labeled long-running); an observed-only start never gets a fabricated duration. When a session ends or its instance disconnects without a terminal tool event, the call is shown incomplete and elapsed time stops at the last known observation.
 
 Reports without `schemaVersion` continue to be accepted as legacy events. New consumers must tolerate absent optional IDs, attributes, and fields from older reports. Events are count/age bounded; pruning sets truncation metadata and timeline projections remain marked partial rather than asserting completeness.
 

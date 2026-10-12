@@ -15,7 +15,7 @@ const assets = new Map(await Promise.all(publicAssets.map(async name =>
     type: mimeTypes[name.slice(name.lastIndexOf('.'))] }])));
 function equal(a, b) { const x = Buffer.from(a || ''), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); }
 const LIMITS = Object.freeze({ instances: 2000, sessionsPerReport: 1000, sessionsTotal: 20000,
-  eventsPerReport: 200, eventsTotal: 10000, timelineIntervals: 5000, timelineIntervalsTotal: 5000,
+  eventsPerReport: 200, eventsPerInstance: 5000, eventsTotal: 10000, timelineIntervals: 5000, timelineIntervalsTotal: 5000,
   field: 4096, summary: 200, pruneInterval: 60000 });
 function boundedString(value, max = LIMITS.field) { return typeof value === 'string' && value.length <= max; }
 function validModel(model) {
@@ -40,6 +40,7 @@ function validObservabilityEvent(event, reportInstanceId) {
   const attributes = event.attributes;
   return event.schemaVersion === 1 && boundedString(event.id, 200) && boundedString(event.instanceId, 100) &&
     event.instanceId === reportInstanceId &&
+    (event.timestampSource === undefined || ['source', 'observed'].includes(event.timestampSource)) &&
     (event.parentSessionId === undefined || boundedString(event.parentSessionId, 200)) &&
     (event.messageId === undefined || boundedString(event.messageId, 200)) &&
     (event.toolCallId === undefined || boundedString(event.toolCallId, 200)) &&
@@ -47,8 +48,9 @@ function validObservabilityEvent(event, reportInstanceId) {
     ['observed', 'inferred'].includes(event.source) &&
     (event.outcome === undefined || ['started', 'completed', 'failure', 'cancelled'].includes(event.outcome)) &&
     (attributes === undefined || attributes && typeof attributes === 'object' && !Array.isArray(attributes) &&
-      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'providerId', 'modelId', 'permissionType', 'nextRetryAt'].includes(key) &&
-        (boundedString(value, 100) || Number.isSafeInteger(value) && value >= 0)));
+      Object.entries(attributes).every(([key, value]) => ['attempt', 'durationMs', 'toolName', 'toolStatus', 'providerId', 'modelId', 'permissionType', 'nextRetryAt'].includes(key) &&
+        (boundedString(value, 100) || Number.isSafeInteger(value) && value >= 0) &&
+        (key !== 'toolStatus' || ['pending', 'running', 'completed', 'error'].includes(value))));
 }
 function validTimeline(timeline) {
   return timeline && typeof timeline === 'object' && !Array.isArray(timeline) && typeof timeline.partial === 'boolean' &&
@@ -134,6 +136,15 @@ export function createServer({ token, now = Date.now } = {}) {
     }
     return { partial, intervals };
   };
+  const mergeEvents = (previous, incoming) => {
+    const eventsById = new Map();
+    for (const event of previous?.events || []) eventsById.set(event.id || JSON.stringify([event.sessionId, event.timestamp, event.kind]), event);
+    for (const event of incoming || []) eventsById.set(event.id || JSON.stringify([event.sessionId, event.timestamp, event.kind]), event);
+    const events = [...eventsById.values()].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+    const partial = events.length > LIMITS.eventsPerInstance;
+    if (partial) events.splice(0, events.length - LIMITS.eventsPerInstance);
+    return { events, partial: Boolean(previous?.eventsPartial || partial) };
+  };
   const trimTimelineCapacity = () => {
     let count = [...instances.values()].reduce((sum, instance) => sum + (instance.timeline?.intervals.length || 0), 0);
     if (count <= LIMITS.timelineIntervalsTotal) return;
@@ -204,6 +215,7 @@ export function createServer({ token, now = Date.now } = {}) {
           }
           const previous = instances.get(v.instanceId);
           const timeline = mergeTimeline(previous?.timeline, v.timeline);
+          const eventHistory = mergeEvents(previous, v.events);
           const sessionsById = new Map(v.sessions.map(session => [session.id, session]));
           const timelineSessionIds = new Set((timeline?.intervals || []).map(interval => interval.sessionId));
           const deletedAt = new Map((v.events || []).filter(event => event.kind === 'deleted').map(event => [event.sessionId, event.timestamp]));
@@ -238,7 +250,8 @@ export function createServer({ token, now = Date.now } = {}) {
           }
           const online = previous ? now() - previous.lastSeen < 20000 : false;
           const replaced = Boolean(supersededBy || previous?.replaced);
-          const report = { ...v, sessions, ...(timeline ? { timeline } : {}) };
+          const report = { ...v, sessions, ...(timeline ? { timeline } : {}),
+            ...(eventHistory.events.length ? { events: eventHistory.events } : {}), ...(eventHistory.partial ? { eventsPartial: true } : {}) };
           const meaningfulChange = !previous || JSON.stringify({ ...previous, lastSeen: undefined, online: undefined, replaced: undefined, replacedBy: undefined }) !== JSON.stringify(report);
           instances.set(v.instanceId, { ...report, ...(replaced ? { replaced: true, replacedBy: supersededBy || previous.replacedBy } : {}),
             lastSeen: replaced && previous ? previous.lastSeen : seenAt, online: !replaced });
@@ -246,7 +259,7 @@ export function createServer({ token, now = Date.now } = {}) {
           let eventCount = [...instances.values()].reduce((count, instance) => count + (instance.events?.length || 0), 0);
           if (eventCount > LIMITS.eventsTotal) {
             for (const instance of [...instances.values()].sort((a, b) => a.lastSeen - b.lastSeen)) {
-              while (eventCount > LIMITS.eventsTotal && instance.events?.length) { instance.events.shift(); eventCount--; }
+              while (eventCount > LIMITS.eventsTotal && instance.events?.length) { instance.events.shift(); instance.eventsPartial = true; eventCount--; }
               if (eventCount <= LIMITS.eventsTotal) break;
             }
           }
