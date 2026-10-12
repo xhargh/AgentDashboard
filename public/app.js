@@ -68,6 +68,7 @@ const eventKinds = {
   created: ['Session created', 'activity-created'], busy: ['Working', 'activity-work'], idle: ['Became idle', 'activity-complete'],
   waiting: ['Permission requested', 'activity-permission'], error: ['Error', 'activity-error'], retry: ['Retrying', 'activity-work'],
   permissionAnswered: ['Permission answered', 'activity-permission'], deleted: ['Session ended', 'activity-complete'],
+  toolActivity: ['Tool activity', 'activity-work'],
 };
 function activityEvents(instance, sessionId) {
   return (Array.isArray(instance.events) ? instance.events : [])

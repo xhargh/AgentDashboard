@@ -81,7 +81,17 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
     if (session.restored) result.restored = true;
     return result;
   }) };
-  if (events?.length) report.events = events;
+  if (events?.length) report.events = events.filter(event => event.kind !== 'toolActivity' || privacy.toolActivity).map(event => {
+    const result = { ...event };
+    if (result.attributes) {
+      const attributes = { ...result.attributes };
+      if (!privacy.toolActivity) { delete attributes.toolName; delete result.toolCallId; delete result.messageId; }
+      if (!privacy.modelMetrics) { delete attributes.providerId; delete attributes.modelId; }
+      if (Object.keys(attributes).length) result.attributes = attributes;
+      else delete result.attributes;
+    } else if (!privacy.toolActivity) { delete result.toolCallId; delete result.messageId; }
+    return result;
+  });
   if (timeline) report.timeline = timeline;
   if (privacy.paths) { report.directory = directory; report.worktree = worktree; }
   if (privacy.git) report.git = git;
@@ -180,7 +190,7 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
     })();
     return providerModelsPromise;
   };
-  const activityEvents = createActivityBuffer();
+  const activityEvents = createActivityBuffer({ instanceId });
   let gitInfo = {}, lastGit = 0, sending = false, stopped = false, dirty = false, eventTimer;
   let retryTimer, failures = 0, nextAttempt = 0;
   const session = id => {
@@ -196,6 +206,9 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
     else Object.assign(session(value.id), { title: value.title || 'Untitled session', parentID: value.parentID,
       directory: value.directory || directory });
   };
+  const recordObserved = (value, kind, context = {}, timestamp) => activityEvents.record(value.id, kind, timestamp, {
+    parentSessionId: value.parentID, ...context,
+  });
   async function send() {
     if (stopped) return;
     if (sending) { dirty = true; return; }
@@ -263,16 +276,19 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           }
         }
         info(p.info);
-        if (event.type === 'session.created' && !existed) activityEvents.record(p.info.id, 'created');
+        if (event.type === 'session.created' && !existed) recordObserved(session(p.info.id), 'created');
       }
-      if (event.type === 'session.deleted') { activityEvents.record(p.info?.id, 'deleted'); sessions.delete(p.info?.id); }
+      if (event.type === 'session.deleted') {
+        const deleted = sessions.get(p.info?.id) || { id: p.info?.id };
+        recordObserved(deleted, 'deleted'); sessions.delete(p.info?.id);
+      }
       if (p.sessionID) {
         const s = session(p.sessionID);
-        if (event.type === 'session.status') { const changed = markState(s, p.status.type); if (changed) activityEvents.record(s.id, p.status.type); if (s.status === 'idle') s.activity = 'Ready'; }
-        if (event.type === 'session.idle') { if (markState(s, 'idle')) activityEvents.record(s.id, 'idle'); s.activity = 'Ready'; }
-        if (event.type === 'session.error') { if (markState(s, 'error')) activityEvents.record(s.id, 'error'); s.activity = 'Session error'; markActivity(s); }
-        if (event.type === 'permission.asked' || event.type === 'permission.updated') { if (markState(s, 'waiting')) activityEvents.record(s.id, 'waiting'); s.activity = 'Waiting for permission'; markActivity(s); }
-        if (event.type === 'permission.replied') { if (markState(s, 'busy')) activityEvents.record(s.id, 'permissionAnswered'); s.activity = 'Permission answered'; markActivity(s); }
+        if (event.type === 'session.status') { const changed = markState(s, p.status.type); if (changed) recordObserved(s, p.status.type); if (s.status === 'idle') s.activity = 'Ready'; }
+        if (event.type === 'session.idle') { if (markState(s, 'idle')) recordObserved(s, 'idle'); s.activity = 'Ready'; }
+        if (event.type === 'session.error') { if (markState(s, 'error')) recordObserved(s, 'error'); s.activity = 'Session error'; markActivity(s); }
+        if (event.type === 'permission.asked' || event.type === 'permission.updated') { if (markState(s, 'waiting')) recordObserved(s, 'waiting'); s.activity = 'Waiting for permission'; markActivity(s); }
+        if (event.type === 'permission.replied') { if (markState(s, 'busy')) recordObserved(s, 'permissionAnswered'); s.activity = 'Permission answered'; markActivity(s); }
         if (event.type === 'todo.updated') { s.todos = p.todos?.map(t => ({ content: t.content, status: t.status })); markActivity(s); }
       }
       if (event.type === 'message.updated' && p.info?.sessionID) {
@@ -300,14 +316,31 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
       }
       if (event.type === 'message.part.updated' && p.part?.type === 'tool') {
         const part = p.part, s = session(part.sessionID);
-        s.activity = `${part.tool}: ${part.state.title || part.state.status}`; markActivity(s);
+        s.activity = `${part.tool}: ${part.state.status}`; markActivity(s);
+        const status = part.state.status;
+        const outcome = status === 'pending' ? undefined : status === 'running' ? 'started'
+          : status === 'completed' ? 'completed' : status === 'error' ? 'failure' : undefined;
+        const partId = part.callID || part.id;
+        const messageId = part.messageID || part.messageId;
+        if (outcome && partId && messageId) {
+          const timeValue = status === 'completed' || status === 'error'
+            ? part.state.time?.end || part.state.time?.completed
+            : part.state.time?.start;
+          const timestamp = Number.isFinite(timeValue) ? new Date(timeValue).toISOString()
+            : typeof timeValue === 'string' && Number.isFinite(Date.parse(timeValue)) ? new Date(timeValue).toISOString() : undefined;
+          recordObserved(s, 'toolActivity', {
+            phase: 'tool', outcome, messageId, toolCallId: partId,
+            eventId: `tool:${s.id}:${messageId}:${partId}:${status}`,
+            attributes: { toolName: part.tool },
+          }, timestamp);
+        }
       }
       // Bound historical memory; active sessions are retained preferentially.
       if (sessions.size > 500) for (const [id, s] of sessions) { if (s.status === 'idle') sessions.delete(id); if (sessions.size <= 500) break; }
       scheduleReport();
     },
     'tool.execute.before': async input => {
-      const s = session(input.sessionID); if (markState(s, 'busy')) activityEvents.record(s.id, 'busy'); s.activity = 'Agent working'; markActivity(s); scheduleReport();
+      const s = session(input.sessionID); if (markState(s, 'busy')) recordObserved(s, 'busy'); s.activity = 'Agent working'; markActivity(s); scheduleReport();
     },
   };
 };

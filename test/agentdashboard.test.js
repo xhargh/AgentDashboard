@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { Readable } from 'node:stream';
 import { createServer } from '../src/server.js';
 import { retryDelay, AgentDashboardPlugin } from '../src/plugin.js';
+import { normalizeObservabilityEvent } from '../src/activity-events.js';
 const token = 'test-token-with-at-least-24-characters';
 async function start(t, options = {}) {
   const server = createServer({ token, ...options });
@@ -168,6 +169,11 @@ test('accepts older reports and validates optional bounded timeline payloads', a
   assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 400);
   value.timeline.intervals[0].status = 'busy';
   value.timeline.intervals[0].startAt = null;
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 400);
+  value.timeline = undefined;
+  value.events = [normalizeObservabilityEvent({ instanceId: value.instanceId, sessionId: 'parent', kind: 'busy', timestamp: '2026-10-12T00:00:00Z' })];
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 200);
+  value.events.push(value.events[0]);
   assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 400);
 });
 test('accumulates timeline intervals beyond report-buffer limits and retains ended descendants', async t => {
@@ -472,13 +478,22 @@ for (const local of [false, true]) test(`plugin reports Git and session events i
   await emit('session.created', { info: { id: 'root', title: 'Parent', directory: dir } });
   await emit('session.created', { info: { id: 'child', parentID: 'root', title: 'Investigate', directory: dir } });
   await emit('session.status', { sessionID: 'child', status: { type: 'busy' } });
-  await emit('message.part.updated', { part: { sessionID: 'child', type: 'tool', tool: 'bash', state: { status: 'running', input: { command: 'secret-value' } } } });
+  const toolPart = { sessionID: 'child', messageID: 'message-1', id: 'part-1', callID: 'call-1', type: 'tool', tool: 'bash', state: { status: 'running', input: { command: 'secret-value' } } };
+  await emit('message.part.updated', { part: toolPart });
+  await emit('message.part.updated', { part: toolPart });
   const running = await waitFor(i => i?.sessions.some(s => s.id === 'child' && s.activity === 'bash: running'));
   assert.equal(running.sessions.find(s => s.id === 'child').parentID, 'root'); assert.ok(!JSON.stringify(running).includes('secret-value'));
   await emit('permission.asked', { sessionID: 'child', permission: 'secret permission', metadata: { prompt: 'secret prompt' } });
   const waiting = await waitFor(i => i?.sessions.find(s => s.id === 'child')?.status === 'waiting');
   assert.ok(waiting.events.some(event => event.sessionId === 'child' && event.kind === 'waiting'));
   assert.ok(waiting.events.some(event => event.sessionId === 'root' && event.kind === 'created'));
+  const toolEvents = waiting.events.filter(event => event.kind === 'toolActivity');
+  assert.equal(toolEvents.length, 1, 'repeated running snapshots produce one event');
+  assert.equal(toolEvents[0].schemaVersion, 1);
+  assert.equal(toolEvents[0].parentSessionId, 'root');
+  assert.equal(toolEvents[0].phase, 'tool');
+  assert.equal(toolEvents[0].outcome, 'started');
+  assert.equal(toolEvents[0].attributes.toolName, 'bash');
   assert.doesNotMatch(JSON.stringify(waiting.events), /secret permission|secret prompt|secret-value|command/);
   await emit('session.idle', { sessionID: 'child' });
   await waitFor(i => i?.sessions.find(s => s.id === 'child')?.status === 'idle');
@@ -631,7 +646,7 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
       todos: [{ content: 'PRIVATE_TASK', status: 'pending' }],
     } } } });
     await plugin.event({ event: { type: 'message.part.updated', properties: {
-      part: { sessionID: 'session', type: 'tool', tool: 'PRIVATE_ACTIVITY', state: { status: 'running', input: { command: 'RAW_TOOL_ARGUMENT' }, output: 'RAW_TOOL_OUTPUT' } },
+      part: { sessionID: 'session', messageID: 'private-message', id: 'private-part', callID: 'private-call', type: 'tool', tool: 'PRIVATE_ACTIVITY', state: { status: 'running', input: { command: 'RAW_TOOL_ARGUMENT' }, output: 'RAW_TOOL_OUTPUT' } },
     } } });
     await plugin.event({ event: { type: 'todo.updated', properties: { sessionID: 'session', todos: [{ content: 'PRIVATE_TASK', status: 'pending' }] } } });
     await plugin.event({ event: { type: 'message.updated', properties: { info: { sessionID: 'session', role: 'assistant', id: 'message',
@@ -646,6 +661,7 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
     assert.ok(!payload.includes('RAW_TOOL_OUTPUT'));
     assert.ok(!payload.includes('RAW_PROMPT'));
     assert.ok(!payload.includes('PRIVATE_REASONING'));
+    if (category === 'toolActivity') assert.ok(!sent.events?.some(event => event.kind === 'toolActivity'));
     assert.equal(sent.sessions[0].id, 'session');
     assert.equal(sent.sessions[0].status, 'busy');
     if (category === 'paths') {
