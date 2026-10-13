@@ -28,6 +28,8 @@ File-change observations carry a one-way file key for de-duplication and only so
 
 MCP health is workspace-scoped rather than attributed to a session. Only sanitized server labels, normalized connection states and optional transition timestamps are sent under the `mcpHealth` privacy category. Endpoints, credentials and arbitrary SDK error payloads are discarded; missing SDK support and polling failures use explicit `unsupported`/`unavailable` states.
 
+LSP and formatter health is also workspace-scoped. The `lspHealth` category carries normalized tool states and diagnostic severity counts only; diagnostic messages and document paths are never copied into telemetry. Unsupported methods and failed queries remain distinct. Diagnostic snapshots are de-duplicated by a one-way document key in local plugin memory and aggregate counts are marked partial when attribution or bounded retention is incomplete.
+
 Reports without `schemaVersion` continue to be accepted as legacy events. New consumers must tolerate absent optional IDs, attributes, and fields from older reports. Events are count/age bounded; pruning sets truncation metadata and timeline projections remain marked partial rather than asserting completeness.
 
 ## Privacy and transport

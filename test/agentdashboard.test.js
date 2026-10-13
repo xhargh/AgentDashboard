@@ -861,6 +861,53 @@ test('polls MCP health safely, falls back for older SDKs, and respects its priva
   assert.equal(statusCalls, 1, 'disabled MCP telemetry does not call the SDK');
   assert.equal(reports.at(-1).mcpHealth, undefined);
 });
+test('polls LSP and formatter status while retaining only diagnostic counts', async t => {
+  const originalFetch = globalThis.fetch;
+  const keys = ['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'AGENTDASHBOARD_TELEMETRY', 'XDG_CONFIG_HOME'];
+  const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const config = await mkdtemp(join(tmpdir(), 'agentdashboard-lsp-health-'));
+  const reports = [];
+  let lspCalls = 0, formatterCalls = 0;
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(config, { recursive: true, force: true });
+  });
+  process.env.AGENTDASHBOARD_URL = 'http://127.0.0.1:4317';
+  process.env.AGENTDASHBOARD_TOKEN = token;
+  process.env.AGENTDASHBOARD_TELEMETRY = '{"paths":false}';
+  process.env.XDG_CONFIG_HOME = config;
+  globalThis.fetch = async (_url, init) => { reports.push(JSON.parse(init.body)); return new Response('', { status: 200 }); };
+  const client = {
+    session: { list: async () => ({ data: [] }), status: async () => ({ data: {} }) },
+    lsp: { status: async () => { lspCalls++; return { data: {
+      tsserver: { status: 'connected', updatedAt: '2026-10-12T10:00:00Z' },
+      pyright: { status: 'failed', error: 'PRIVATE_LSP_ERROR' },
+    } }; } },
+    formatter: { status: async () => { formatterCalls++; return { data: { prettier: true, rustfmt: true } }; } },
+  };
+  const plugin = await AgentDashboardPlugin({ directory: '/tmp/lsp-health', client });
+  t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp/lsp-health' } } }));
+  for (let n = 0; n < 100 && !reports.find(report => report.lspHealth?.lsp.status === 'available'); n++) await new Promise(resolve => setTimeout(resolve, 20));
+  await plugin.event({ event: { type: 'lsp.client.diagnostics', properties: { uri: '/private/project/file.ts', diagnostics: [
+    { severity: 1, message: 'PRIVATE_DIAGNOSTIC_MESSAGE' }, { severity: 2, message: 'PRIVATE_DIAGNOSTIC_WARNING' },
+  ] } } });
+  for (let n = 0; n < 100 && !reports.at(-1)?.lspHealth?.diagnostics?.available; n++) await new Promise(resolve => setTimeout(resolve, 20));
+  const report = reports.at(-1), health = report.lspHealth;
+  assert.deepEqual(health.lsp.servers.map(server => [server.name, server.state]), [['tsserver', 'connected'], ['pyright', 'failed']]);
+  assert.deepEqual(health.formatter.formatters.map(formatter => [formatter.name, formatter.state]), [['prettier', 'available'], ['rustfmt', 'available']]);
+  assert.deepEqual([health.diagnostics.errors, health.diagnostics.warnings, health.diagnostics.information, health.diagnostics.hints], [1, 1, 0, 0]);
+  assert.doesNotMatch(JSON.stringify(report), /PRIVATE_LSP_ERROR|PRIVATE_DIAGNOSTIC|\/private\/project\/file/);
+  assert.equal(lspCalls, 1);
+  assert.equal(formatterCalls, 1);
+
+  const unsupported = await AgentDashboardPlugin({ directory: '/tmp/lsp-unsupported', client: { session: client.session } });
+  t.after(() => unsupported.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp/lsp-unsupported' } } }));
+  for (let n = 0; n < 100 && !reports.find(item => item.lspHealth?.lsp.status === 'unsupported'); n++) await new Promise(resolve => setTimeout(resolve, 20));
+  const noSdk = reports.find(item => item.lspHealth?.lsp.status === 'unsupported').lspHealth;
+  assert.equal(noSdk.formatter.status, 'unsupported');
+  assert.equal(noSdk.diagnostics.available, false);
+});
 test('plugin keeps HTTP, network, and timeout failures out of client output', async t => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;

@@ -626,6 +626,12 @@ test('shows workspace-level MCP health without exposing endpoints or credentials
       { name: 'auth-required', state: 'auth-required' },
       { name: 'failing-server', state: 'failed' },
     ] };
+    state.instances[0].lspHealth = {
+      observedAt: '2026-10-12T10:00:00Z',
+      lsp: { status: 'available', servers: [{ name: 'tsserver', state: 'connected' }, { name: 'pyright', state: 'failed' }] },
+      formatter: { status: 'available', formatters: [{ name: 'prettier', state: 'available' }] },
+      diagnostics: { available: true, observedAt: '2026-10-12T09:59:00Z', errors: 1, warnings: 2, information: 0, hints: 0, partial: false },
+    };
     return state;
   });
   await page.goto('/');
@@ -640,6 +646,12 @@ test('shows workspace-level MCP health without exposing endpoints or credentials
   await expect(details.locator('li').nth(1)).toHaveText('auth-required · auth-required');
   await expect(details.locator('li').nth(2)).toHaveText('failing-server · failed');
   await expect(details).not.toContainText(/https?:|token|secret|credential/i);
+  const lsp = root.locator('article.session-card > details.lsp-health');
+  await expect(lsp.locator('> summary')).toContainText('LSP · 1 connected · 1 failed · 1 formatters available · 3 diagnostics');
+  await lsp.locator('> summary').click();
+  await expect(lsp.locator('li').nth(0)).toContainText('LSP tsserver · connected');
+  await expect(lsp.locator('li').nth(2)).toContainText('Formatter prettier · available');
+  await expect(lsp.locator('li').nth(3)).toContainText('Diagnostics · 1 errors · 2 warnings');
 });
 
 test('shows observed delegation lifecycle, explicit task link, concurrent child and restored unknowns', async ({ page }) => {

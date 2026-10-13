@@ -9,7 +9,7 @@ import { createActivityBuffer } from './activity-events.js';
 import { buildExecutionTimeline } from './execution-timeline.js';
 const exec = promisify(execFile);
 
-const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics', 'permissionDetails', 'mcpHealth'];
+const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics', 'permissionDetails', 'mcpHealth', 'lspHealth'];
 const MAX_USAGE_MESSAGES = 100;
 const USAGE_KEYS = [['input', 'input'], ['output', 'output'], ['reasoning', 'reasoning'], ['cacheRead', 'cache', 'read'], ['cacheWrite', 'cache', 'write']];
 const permissionTitles = {
@@ -128,6 +128,37 @@ function normalizeMcpHealth(response, now = new Date().toISOString()) {
   });
   return { available: true, status: 'available', observedAt: now, servers, partial: values.length > servers.length };
 }
+function normalizeServiceValues(response) {
+  const raw = response?.data ?? response;
+  const values = raw?.servers ?? raw?.lsp ?? raw?.formatters ?? raw;
+  return Array.isArray(values) ? values.map(item => typeof item === 'string' ? [item, true] : [item?.name, item])
+    : values && typeof values === 'object' ? Object.entries(values) : [];
+}
+function normalizeLspStatus(response, now) {
+  const values = normalizeServiceValues(response);
+  const servers = values.slice(0, 100).map(([name, value]) => {
+    const lastTransitionAt = safeMcpTransitionTime(value?.lastTransitionAt ?? value?.updatedAt);
+    return { name: safeMcpName(name), state: mcpState(value), ...(lastTransitionAt ? { lastTransitionAt } : {}) };
+  });
+  return { status: 'available', servers, partial: values.length > servers.length, observedAt: now };
+}
+function normalizeFormatterStatus(response, now) {
+  const values = normalizeServiceValues(response);
+  const formatters = values.slice(0, 100).map(([name, value]) => {
+    const raw = typeof value === 'string' ? value : value?.status ?? value?.state;
+    const state = value === false || /fail|error|unavailable|disabled/i.test(String(raw)) ? 'unavailable'
+      : value === true || /available|ready|enabled/i.test(String(raw)) ? 'available' : 'unknown';
+    return { name: safeMcpName(name), state };
+  });
+  return { status: 'available', formatters, partial: values.length > formatters.length, observedAt: now };
+}
+function diagnosticSeverity(value) {
+  if (value === 1 || typeof value === 'string' && /error/i.test(value)) return 'errors';
+  if (value === 2 || typeof value === 'string' && /warn/i.test(value)) return 'warnings';
+  if (value === 3 || typeof value === 'string' && /info/i.test(value)) return 'information';
+  if (value === 4 || typeof value === 'string' && /hint/i.test(value)) return 'hints';
+  return undefined;
+}
 function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
   if (value === undefined || value === '') return Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, true]));
   let config;
@@ -145,7 +176,7 @@ function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
   if (!categories.paths) categories.git = false;
   return categories;
 }
-function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events, eventsPartial, timeline, unassignedFileCount, unassignedFileChangesPartial, mcpHealth }, privacy) {
+function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events, eventsPartial, timeline, unassignedFileCount, unassignedFileChangesPartial, mcpHealth, lspHealth }, privacy) {
   const report = { instanceId, machineId, generationStartedAt, host, pid, sessions: sessions.map(session => {
     const result = { id: session.id, status: session.status };
     if (session.parentID) result.parentID = session.parentID;
@@ -188,6 +219,7 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
   if (unassignedFileCount) report.unassignedFileCount = unassignedFileCount;
   if (unassignedFileChangesPartial) report.unassignedFileChangesPartial = true;
   if (privacy.mcpHealth && mcpHealth) report.mcpHealth = mcpHealth;
+  if (privacy.lspHealth && lspHealth) report.lspHealth = lspHealth;
   if (privacy.paths) { report.directory = directory; report.worktree = worktree; }
   if (privacy.git) report.git = git;
   return report;
@@ -291,6 +323,9 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   let gitInfo = {}, lastGit = 0, sending = false, stopped = false, dirty = false, eventTimer;
   let retryTimer, failures = 0, nextAttempt = 0;
   let mcpHealth, lastMcpAttempt = 0, mcpInFlight = false;
+  let lspHealth, lastLspAttempt = 0, lspInFlight = false, diagnosticsPartial = false, lastDiagnosticsAt;
+  const diagnosticsByFile = new Map();
+  let unattributedDiagnostics;
   const session = id => {
     if (!sessions.has(id)) sessions.set(id, createSession(id, { title: 'Untitled session', directory, status: 'idle', activity: 'Ready' }));
     return sessions.get(id);
@@ -320,6 +355,37 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
     })]).then(response => { mcpHealth = normalizeMcpHealth(response); })
       .catch(() => { mcpHealth = { available: false, status: 'unavailable', observedAt: new Date().toISOString(), servers: [] }; })
       .finally(() => { mcpInFlight = false; scheduleReport(); });
+  };
+  const refreshLspHealth = (force = false) => {
+    if (!privacy.lspHealth || stopped || lspInFlight || Date.now() - lastLspAttempt < (force ? 1000 : 60000)) return;
+    lastLspAttempt = Date.now(); lspInFlight = true;
+    const query = method => typeof method !== 'function' ? Promise.resolve({ __healthUnsupported: true })
+      : Promise.race([Promise.resolve().then(method), new Promise((_, reject) => {
+        const timer = setTimeout(() => reject(new Error('timeout')), 1500); timer.unref?.();
+      })]);
+    const lspQuery = query(client?.lsp?.status ? () => client.lsp.status() : undefined);
+    const formatterQuery = query(client?.formatter?.status ? () => client.formatter.status() : undefined);
+    Promise.allSettled([lspQuery, formatterQuery]).then(([lspResult, formatterResult]) => {
+      const now = new Date().toISOString();
+      const lsp = lspResult.status === 'fulfilled' && lspResult.value?.__healthUnsupported ? { status: 'unsupported', servers: [], observedAt: now }
+        : lspResult.status === 'fulfilled' ? normalizeLspStatus(lspResult.value, now)
+        : { status: 'unavailable', servers: [], observedAt: now };
+      const formatter = formatterResult.status === 'fulfilled' && formatterResult.value?.__healthUnsupported ? { status: 'unsupported', formatters: [], observedAt: now }
+        : formatterResult.status === 'fulfilled' ? normalizeFormatterStatus(formatterResult.value, now)
+        : { status: 'unavailable', formatters: [], observedAt: now };
+      const diagnostics = [...diagnosticsByFile.values(), ...(unattributedDiagnostics ? [unattributedDiagnostics] : [])];
+      lspHealth = {
+        observedAt: now, lsp, formatter,
+        diagnostics: {
+          available: Boolean(lastDiagnosticsAt), observedAt: lastDiagnosticsAt,
+          errors: diagnostics.reduce((sum, item) => sum + item.errors, 0),
+          warnings: diagnostics.reduce((sum, item) => sum + item.warnings, 0),
+          information: diagnostics.reduce((sum, item) => sum + item.information, 0),
+          hints: diagnostics.reduce((sum, item) => sum + item.hints, 0),
+          partial: diagnosticsPartial,
+        },
+      };
+    }).finally(() => { lspInFlight = false; scheduleReport(); });
   };
   const updatePermissionRequest = (s, permission, updated = false) => {
     const idValue = permission?.id || permission?.permissionID || permission?.permissionId;
@@ -397,7 +463,7 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           directory, worktree, sessions: [...sessions.values()], git: gitInfo, events: activityEvents.snapshot(),
           timeline: buildExecutionTimeline(activityEvents.snapshot(), [...sessions.values()], activityEvents.truncated),
           eventsPartial: activityEvents.truncated,
-          unassignedFileCount: unassignedFileKeys.size, unassignedFileChangesPartial, mcpHealth }, privacy)), signal: AbortSignal.timeout(3000),
+          unassignedFileCount: unassignedFileKeys.size, unassignedFileChangesPartial, mcpHealth, lspHealth }, privacy)), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {
         await response.body?.cancel();
@@ -439,13 +505,54 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   } catch { /* Events still populate the dashboard when SDK discovery is unavailable. */ }
   void send();
   void refreshMcpHealth();
+  void refreshLspHealth();
   const timer = setInterval(() => void send(), 5000); timer.unref?.();
   const mcpTimer = setInterval(() => refreshMcpHealth(), 60000); mcpTimer.unref?.();
+  const lspTimer = setInterval(() => refreshLspHealth(), 60000); lspTimer.unref?.();
   return {
     event: async ({ event }) => {
       const p = event.properties || {};
-      if (event.type === 'server.instance.disposed' && p.directory === directory) { stopped = true; clearInterval(timer); clearInterval(mcpTimer); clearTimeout(eventTimer); clearTimeout(retryTimer); return; }
+      if (event.type === 'server.instance.disposed' && p.directory === directory) { stopped = true; clearInterval(timer); clearInterval(mcpTimer); clearInterval(lspTimer); clearTimeout(eventTimer); clearTimeout(retryTimer); return; }
       if (event.type.startsWith('mcp.')) refreshMcpHealth(true);
+      if (event.type === 'lsp.updated' || event.type === 'formatter.updated') refreshLspHealth(true);
+      if (event.type === 'lsp.client.diagnostics' && privacy.lspHealth) {
+        const diagnostics = Array.isArray(p.diagnostics) ? p.diagnostics : Array.isArray(p.diagnostics?.items) ? p.diagnostics.items : [];
+        const byFile = new Map();
+        for (const diagnostic of diagnostics) {
+          const path = safeFilePath(diagnostic?.uri || p.uri || p.path);
+          const key = path ? createHash('sha256').update(path).digest('hex') : undefined;
+          if (!key) diagnosticsPartial = true;
+          const counts = byFile.get(key) || { errors: 0, warnings: 0, information: 0, hints: 0 };
+          const severity = diagnosticSeverity(diagnostic?.severity);
+          if (severity) counts[severity]++;
+          else diagnosticsPartial = true;
+          byFile.set(key, counts);
+        }
+        if (!diagnostics.length && safeFilePath(p.uri || p.path)) {
+          const key = createHash('sha256').update(safeFilePath(p.uri || p.path)).digest('hex');
+          byFile.set(key, { errors: 0, warnings: 0, information: 0, hints: 0 });
+        } else if (!diagnostics.length) diagnosticsPartial = true;
+        for (const [key, counts] of byFile) {
+          if (key === undefined) unattributedDiagnostics = counts;
+          else if (diagnosticsByFile.has(key) || diagnosticsByFile.size < 1000) diagnosticsByFile.set(key, counts);
+          else diagnosticsPartial = true;
+        }
+        lastDiagnosticsAt = new Date().toISOString();
+        const all = [...diagnosticsByFile.values(), ...(unattributedDiagnostics ? [unattributedDiagnostics] : [])];
+        const diagnosticsSummary = {
+          available: true, observedAt: lastDiagnosticsAt,
+          errors: all.reduce((sum, item) => sum + item.errors, 0),
+          warnings: all.reduce((sum, item) => sum + item.warnings, 0),
+          information: all.reduce((sum, item) => sum + item.information, 0),
+          hints: all.reduce((sum, item) => sum + item.hints, 0),
+          partial: diagnosticsPartial,
+        };
+        lspHealth ||= { observedAt: lastDiagnosticsAt,
+          lsp: { status: typeof client?.lsp?.status === 'function' ? 'unavailable' : 'unsupported', servers: [] },
+          formatter: { status: typeof client?.formatter?.status === 'function' ? 'unavailable' : 'unsupported', formatters: [] } };
+        lspHealth.diagnostics = diagnosticsSummary;
+        scheduleReport();
+      }
       if (event.type === 'session.created' || event.type === 'session.updated') {
         const existed = sessions.has(p.info?.id);
         if (event.type === 'session.created' && p.info?.id && !p.info.parentID) {

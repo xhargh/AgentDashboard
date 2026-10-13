@@ -64,6 +64,25 @@ function validTimeline(timeline) {
       ['busy', 'idle', 'waiting', 'error', 'retry'].includes(interval.status) &&
       (interval.endAt === null || Date.parse(interval.endAt) >= Date.parse(interval.startAt)));
 }
+function validWorkspaceService(service, states) {
+  return service && typeof service === 'object' && !Array.isArray(service) && ['available', 'unsupported', 'unavailable'].includes(service.status) &&
+    (service.observedAt === undefined || validTimestamp(service.observedAt)) &&
+    (service.partial === undefined || typeof service.partial === 'boolean') &&
+    Array.isArray(service.servers || service.formatters) && (service.servers || service.formatters).length <= 100 &&
+    (service.servers || service.formatters).every(item => item && boundedString(item.name, 80) && states.includes(item.state) &&
+      (item.lastTransitionAt === undefined || validTimestamp(item.lastTransitionAt)));
+}
+function validLspHealth(health) {
+  if (!health || typeof health !== 'object' || Array.isArray(health) || !validTimestamp(health.observedAt) ||
+      !validWorkspaceService(health.lsp, ['connected', 'disconnected', 'auth-required', 'failed', 'unknown']) ||
+      !validWorkspaceService(health.formatter, ['available', 'unavailable', 'unknown'])) return false;
+  const diagnostics = health.diagnostics;
+  return diagnostics === undefined || diagnostics && typeof diagnostics === 'object' && !Array.isArray(diagnostics) &&
+    typeof diagnostics.available === 'boolean' && ['errors', 'warnings', 'information', 'hints'].every(key =>
+      diagnostics[key] === undefined || Number.isSafeInteger(diagnostics[key]) && diagnostics[key] >= 0) &&
+    (diagnostics.observedAt === undefined || validTimestamp(diagnostics.observedAt)) &&
+    (diagnostics.partial === undefined || typeof diagnostics.partial === 'boolean');
+}
 function validReport(v) {
   const eventsValid = !v || v.events === undefined || Array.isArray(v.events) && v.events.length <= LIMITS.eventsPerReport &&
     v.events.every(event => validObservabilityEvent(event, v.instanceId)) &&
@@ -105,6 +124,7 @@ function validReport(v) {
        Array.isArray(v.mcpHealth.servers) && v.mcpHealth.servers.length <= 100 && v.mcpHealth.servers.every(server => server &&
          boundedString(server.name, 80) && ['connected', 'disconnected', 'auth-required', 'failed', 'unknown'].includes(server.state) &&
          (server.lastTransitionAt === undefined || validTimestamp(server.lastTransitionAt)))) &&
+     (v.lspHealth === undefined || validLspHealth(v.lspHealth)) &&
      eventsValid && (v.timeline === undefined || validTimeline(v.timeline));
 }
 export function createServer({ token, now = Date.now } = {}) {
