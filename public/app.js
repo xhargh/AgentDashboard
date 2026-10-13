@@ -3,11 +3,14 @@ const $ = id => document.getElementById(id);
 let token = '', instances = [], revision = null, pending = false, authRequired = false;
 let notificationEnabled = false, initializedAttention = false;
 let nativeNotificationActionRegistered = false;
-let transcriptOptIn = false, transcriptAccessToken = '';
+let transcriptOptIn = false, toolDetailsOptIn = false, transcriptAccessToken = '';
 const transcriptStates = new Map();
 const transcriptRequestsInFlight = new Set();
 const transcriptRequestIds = new Map();
 const transcriptCancelled = new Set();
+const toolDetailStates = new Map();
+const toolDetailRequestsInFlight = new Set();
+const expandedToolDetails = new Set();
 const previousStatuses = new Map();
 const originalTitle = document.title;
 const numberFormat = new Intl.NumberFormat();
@@ -98,6 +101,7 @@ function toolExecutionSpans(instance, sessionId) {
     if (!calls.has(key)) calls.set(key, { toolName: event.attributes?.toolName });
     const call = calls.get(key);
     call.callId = event.toolCallId;
+    call.messageId = event.messageId;
     if (event.attributes?.toolName) call.toolName = event.attributes.toolName;
     if (event.attributes?.toolStatus) call.toolStatus = event.attributes.toolStatus;
     if (event.outcome === 'started' && !call.start) call.start = event;
@@ -113,6 +117,7 @@ function toolExecutionSpans(instance, sessionId) {
     return {
       toolName: call.toolName,
       callId: call.callId,
+      messageId: call.messageId,
       toolStatus: call.toolStatus,
       outcome: call.finish?.outcome,
       started: Boolean(call.start),
@@ -675,6 +680,27 @@ function render() {
             ? `ended ${formatTimestamp(call.endObservedAt)}` : `end time unavailable · last observed ${formatTimestamp(call.endObservedAt)}`);
           else if (!call.outcome) times.push('end time unavailable');
           item.append(el('small', times.join(' · ')));
+          if (toolDetailsOptIn && i.toolDetailsEnabled && call.callId && call.messageId) {
+            const detailKey = `${i.instanceId}:${s.id}:${call.messageId}:${call.callId}`;
+            const detail = toolDetailStates.get(detailKey);
+            const reveal = el('button', detail?.status === 'ready' ? 'Hide details' : 'Reveal safe details', 'secondary-button tool-detail-reveal');
+            reveal.type = 'button';
+            reveal.setAttribute('aria-label', `Reveal safe details for ${call.toolName || 'tool call'}`);
+            reveal.addEventListener('click', () => {
+              if (detail?.status === 'ready' && expandedToolDetails.has(detailKey)) expandedToolDetails.delete(detailKey);
+              else if (detail?.status === 'ready') expandedToolDetails.add(detailKey);
+              else { expandedToolDetails.add(detailKey); void loadToolDetail(i, s, call); }
+              render();
+            });
+            item.append(reveal);
+            if (expandedToolDetails.has(detailKey)) {
+              item.append(el('small', detail?.title || detail?.message || (detail?.status === 'ready' ? 'No safe title available.' : 'Loading safe tool details…'), 'tool-detail-title'));
+              if (detail?.metadata) {
+                const metadata = Object.entries(detail.metadata).map(([name, value]) => `${name}: ${value}`).join(' · ');
+                if (metadata) item.append(el('small', `Safe metadata · ${metadata}`, 'tool-detail-metadata'));
+              }
+            }
+          }
           toolList.append(item);
         }
         toolDetails.append(toolList);
@@ -1045,6 +1071,50 @@ async function cancelSessionTranscript(instance, session) {
   await fetch('/api/transcript/cancel', { method: 'POST', headers,
     body: JSON.stringify({ requestId, instanceId: instance.instanceId, sessionId: session.id }), signal: AbortSignal.timeout(3000) }).catch(() => {});
 }
+async function loadToolDetail(instance, session, call) {
+  const key = `${instance.instanceId}:${session.id}:${call.messageId}:${call.callId}`;
+  if (toolDetailRequestsInFlight.has(key) || toolDetailStates.get(key)?.status === 'ready') return;
+  if (!toolDetailsOptIn) toolDetailStates.set(key, { status: 'blocked', message: 'Enable safe tool details in Filter agents to reveal a sanitized title.' });
+  else if (!transcriptAccessToken) toolDetailStates.set(key, { status: 'blocked', message: 'Enter the separate inspection access key in Filter agents.' });
+  else if (!instance.toolDetailsEnabled) toolDetailStates.set(key, { status: 'unavailable', message: 'Safe tool details are not enabled by the monitored OpenCode plugin.' });
+  else {
+    toolDetailRequestsInFlight.add(key);
+    toolDetailStates.set(key, { status: 'loading' });
+    render();
+    try {
+      const headers = { 'content-type': 'application/json', 'x-agentdashboard-transcript-token': transcriptAccessToken };
+      if (token) headers.authorization = `Bearer ${token}`;
+      const request = await fetch('/api/transcript/request', {
+        method: 'POST', headers, body: JSON.stringify({ instanceId: instance.instanceId, sessionId: session.id,
+          mode: 'toolDetails', messageId: call.messageId, toolCallId: call.callId }), signal: AbortSignal.timeout(4000),
+      });
+      if (request.status !== 202) throw new Error('unavailable');
+      const { requestId, expiresAt } = await request.json();
+      let result;
+      while (Date.now() < expiresAt) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        const response = await fetch(`/api/transcript/result?requestId=${encodeURIComponent(requestId)}`, {
+          headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'x-agentdashboard-transcript-token': transcriptAccessToken },
+          signal: AbortSignal.timeout(4000),
+        });
+        if (response.status === 200) { result = await response.json(); break; }
+        if (response.status !== 202) throw new Error('unavailable');
+      }
+      if (!result) throw new Error('expired');
+      toolDetailStates.set(key, result.available && (result.toolDetail?.title || result.toolDetail?.metadata)
+        ? { status: 'ready', title: result.toolDetail.title, metadata: result.toolDetail.metadata }
+        : { status: 'unavailable', message: 'No safe title is available for this tool call.' });
+    } catch (error) {
+      toolDetailStates.set(key, { status: 'unavailable', message: error.message === 'expired'
+        ? 'Tool detail request expired; reveal again to retry.' : 'Tool detail is unavailable for this call.' });
+    } finally {
+      toolDetailRequestsInFlight.delete(key);
+      render();
+    }
+    return;
+  }
+  render();
+}
 function updateTrayStatus(status) {
   const invoke = globalThis.__TAURI__?.core?.invoke;
   if (invoke) void invoke('update_tray_status', { status }).catch(() => {});
@@ -1107,8 +1177,13 @@ $('session-log-enabled').addEventListener('change', event => {
   if (!transcriptOptIn) transcriptStates.clear();
   render();
 });
+$('tool-details-enabled').addEventListener('change', event => {
+  toolDetailsOptIn = event.target.checked;
+  if (!toolDetailsOptIn) { toolDetailStates.clear(); expandedToolDetails.clear(); }
+  render();
+});
 $('session-log-token').addEventListener('input', event => {
-  if (transcriptAccessToken !== event.target.value) transcriptStates.clear();
+  if (transcriptAccessToken !== event.target.value) { transcriptStates.clear(); toolDetailStates.clear(); expandedToolDetails.clear(); }
   transcriptAccessToken = event.target.value;
 });
 $('tab-count').addEventListener('change', () => {

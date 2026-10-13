@@ -9,8 +9,8 @@ import { createActivityBuffer } from './activity-events.js';
 import { buildExecutionTimeline } from './execution-timeline.js';
 const exec = promisify(execFile);
 
-const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics', 'permissionDetails', 'mcpHealth', 'lspHealth', 'sessionTranscript'];
-const DEFAULT_DISABLED_CATEGORIES = new Set(['sessionTranscript']);
+const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics', 'permissionDetails', 'mcpHealth', 'lspHealth', 'sessionTranscript', 'toolDetails'];
+const DEFAULT_DISABLED_CATEGORIES = new Set(['sessionTranscript', 'toolDetails']);
 const MAX_USAGE_MESSAGES = 100;
 const USAGE_KEYS = [['input', 'input'], ['output', 'output'], ['reasoning', 'reasoning'], ['cacheRead', 'cache', 'read'], ['cacheWrite', 'cache', 'write']];
 const permissionTitles = {
@@ -194,6 +194,40 @@ function sanitizeTranscript(response) {
   });
   return { available: true, partial, messages };
 }
+function safeToolTitle(value) {
+  if (typeof value !== 'string') return undefined;
+  const title = value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!title || title.length > 120 || /[\\/]|https?:|--?\w|(?:^|\s)[\w.-]+\.[a-z0-9]{1,12}(?:$|\s)|\b(token|secret|password|credential|authorization|private[_ -]?key)\b/i.test(title) ||
+      !/^[\p{L}\p{N} .,()_'-]+$/u.test(title) || /^[a-f0-9]{24,}$/i.test(title)) return undefined;
+  return title;
+}
+const SAFE_TOOL_METADATA_KEYS = new Set(['count', 'limit', 'offset', 'page', 'maxResults', 'timeoutMs', 'recursive', 'includeHidden']);
+function safeToolMetadata(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const metadata = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (!SAFE_TOOL_METADATA_KEYS.has(key)) continue;
+    if (typeof value === 'boolean') metadata[key] = value;
+    else if (Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000) metadata[key] = value;
+  }
+  return Object.keys(metadata).length ? metadata : undefined;
+}
+function sanitizeToolDetail(response, request) {
+  const messages = response?.data?.messages ?? response?.data ?? response?.messages ?? response;
+  if (!Array.isArray(messages)) return { available: false, partial: true, messages: [], toolDetail: undefined };
+  for (const message of messages) {
+    if (message?.id !== request.messageId || !Array.isArray(message.parts)) continue;
+    const part = message.parts.find(item => (item?.callID || item?.id) === request.toolCallId && item?.type === 'tool');
+    if (!part) continue;
+    const status = ['pending', 'running', 'completed', 'error'].includes(part.state?.status) ? part.state.status : 'unknown';
+    const title = safeToolTitle(part.state?.title);
+    const metadata = safeToolMetadata(part.state?.input);
+    return { available: true, partial: !title, messages: [], toolDetail: {
+      callId: request.toolCallId, name: safeMcpName(part.tool), status, ...(title ? { title } : {}), ...(metadata ? { metadata } : {}),
+    } };
+  }
+  return { available: false, partial: true, messages: [], toolDetail: undefined };
+}
 function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
   if (value === undefined || value === '') return Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, !DEFAULT_DISABLED_CATEGORIES.has(category)]));
   let config;
@@ -211,7 +245,7 @@ function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
   if (!categories.paths) categories.git = false;
   return categories;
 }
-function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events, eventsPartial, timeline, unassignedFileCount, unassignedFileChangesPartial, mcpHealth, lspHealth, transcriptEnabled }, privacy) {
+function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events, eventsPartial, timeline, unassignedFileCount, unassignedFileChangesPartial, mcpHealth, lspHealth, transcriptEnabled, toolDetailsEnabled }, privacy) {
   const report = { instanceId, machineId, generationStartedAt, host, pid, sessions: sessions.map(session => {
     const result = { id: session.id, status: session.status };
     if (session.parentID) result.parentID = session.parentID;
@@ -256,6 +290,7 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
   if (privacy.mcpHealth && mcpHealth) report.mcpHealth = mcpHealth;
   if (privacy.lspHealth && lspHealth) report.lspHealth = lspHealth;
   report.transcriptEnabled = Boolean(transcriptEnabled);
+  report.toolDetailsEnabled = Boolean(toolDetailsEnabled);
   if (privacy.paths) { report.directory = directory; report.worktree = worktree; }
   if (privacy.git) report.git = git;
   return report;
@@ -334,6 +369,8 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   }
   const loopbackEndpoint = ['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname);
   const transcriptEnabled = Boolean(privacy.sessionTranscript && transcriptToken?.length >= 24 && transcriptToken !== token &&
+    (loopbackEndpoint || endpoint.protocol === 'https:'));
+  const toolDetailsEnabled = Boolean(privacy.toolDetails && privacy.toolActivity && transcriptToken?.length >= 24 && transcriptToken !== token &&
     (loopbackEndpoint || endpoint.protocol === 'https:'));
   const instanceId = randomUUID();
   const generationStartedAt = Date.now();
@@ -430,7 +467,8 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
     }).finally(() => { lspInFlight = false; scheduleReport(); });
   };
   const processTranscriptRequest = async request => {
-    if (!transcriptEnabled || stopped || !request || typeof request.requestId !== 'string' || typeof request.sessionId !== 'string' ||
+    const detailMode = request?.mode === 'toolDetails';
+    if (!(detailMode ? toolDetailsEnabled : transcriptEnabled) || stopped || !request || typeof request.requestId !== 'string' || typeof request.sessionId !== 'string' ||
         request.expiresAt <= Date.now() || transcriptRequestsInFlight.has(request.requestId)) return;
     transcriptRequestsInFlight.add(request.requestId);
     try {
@@ -439,21 +477,23 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
       let result = cached;
       if (!result) {
         const currentSession = sessions.get(request.sessionId);
-        let transcript = { available: false, partial: true, messages: [] };
+        let transcript = { available: false, partial: true, messages: [], ...(detailMode ? { toolDetail: undefined } : {}) };
         if (currentSession && typeof client?.session?.messages === 'function') {
           try {
             const response = await Promise.race([client.session.messages({ path: { id: request.sessionId } }), new Promise((_, reject) => {
               const timer = setTimeout(() => reject(new Error('timeout')), 2500); timer.unref?.();
             })]);
-            transcript = sanitizeTranscript(response);
+            transcript = detailMode ? sanitizeToolDetail(response, request) : sanitizeTranscript(response);
           } catch { transcript = { available: false, partial: true, messages: [] }; }
         }
-        result = { requestId: request.requestId, instanceId, sessionId: request.sessionId, ...transcript };
+        result = { requestId: request.requestId, instanceId, sessionId: request.sessionId,
+          ...(detailMode ? { mode: 'toolDetails', toolCallId: request.toolCallId } : { mode: 'transcript' }), ...transcript };
         cached = { ...result, expiresAt: Math.min(request.expiresAt, Date.now() + 10000) };
         transcriptResultCache.set(request.requestId, cached);
         while (transcriptResultCache.size > 10) transcriptResultCache.delete(transcriptResultCache.keys().next().value);
-      } else result = { requestId: cached.requestId, instanceId: cached.instanceId, sessionId: cached.sessionId,
-        available: cached.available, partial: cached.partial, messages: cached.messages };
+      } else result = { requestId: cached.requestId, instanceId: cached.instanceId, sessionId: cached.sessionId, mode: cached.mode,
+        ...(cached.toolCallId ? { toolCallId: cached.toolCallId } : {}), available: cached.available, partial: cached.partial,
+        messages: cached.messages, ...(cached.toolDetail ? { toolDetail: cached.toolDetail } : {}) };
       if (request.expiresAt <= Date.now()) return;
       const response = await fetch(new URL('/api/transcript/result', endpoint), {
         method: 'POST', redirect: 'error',
@@ -542,14 +582,14 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           directory, worktree, sessions: [...sessions.values()], git: gitInfo, events: activityEvents.snapshot(),
           timeline: buildExecutionTimeline(activityEvents.snapshot(), [...sessions.values()], activityEvents.truncated),
           eventsPartial: activityEvents.truncated,
-          unassignedFileCount: unassignedFileKeys.size, unassignedFileChangesPartial, mcpHealth, lspHealth, transcriptEnabled }, privacy)), signal: AbortSignal.timeout(3000),
+          unassignedFileCount: unassignedFileKeys.size, unassignedFileChangesPartial, mcpHealth, lspHealth, transcriptEnabled, toolDetailsEnabled }, privacy)), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {
         await response.body?.cancel();
         return;
       }
       const responseData = await response.json().catch(() => undefined);
-      if (transcriptEnabled && Array.isArray(responseData?.transcriptRequests)) {
+      if ((transcriptEnabled || toolDetailsEnabled) && Array.isArray(responseData?.transcriptRequests)) {
         for (const request of responseData.transcriptRequests) void processTranscriptRequest(request);
       }
       succeeded = true;
