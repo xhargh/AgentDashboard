@@ -33,14 +33,24 @@ function validUsage(usage) {
     (usage.partial === undefined || typeof usage.partial === 'boolean');
 }
 function validTranscriptResult(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) && boundedString(value.requestId, 100) &&
-    boundedString(value.instanceId, 100) && boundedString(value.sessionId, 200) && typeof value.available === 'boolean' && typeof value.partial === 'boolean' &&
-    Array.isArray(value.messages) && value.messages.length <= 50 && value.messages.every(message => message &&
-      (message.id === undefined || boundedString(message.id, 200)) && ['user', 'assistant', 'unknown'].includes(message.role) &&
-      (message.timestamp === null || validTimestamp(message.timestamp)) && Array.isArray(message.parts) && message.parts.length <= 100 &&
-      message.parts.every(part => part && (part.type === 'text' && boundedString(part.text, 8000) ||
-        part.type === 'tool' && boundedString(part.name, 100) && ['pending', 'running', 'completed', 'error', 'unknown'].includes(part.status) ||
-        part.type === 'attachment' && part.available === false)));
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !boundedString(value.requestId, 100) ||
+      !boundedString(value.instanceId, 100) || !boundedString(value.sessionId, 200) || typeof value.available !== 'boolean' ||
+      typeof value.partial !== 'boolean' || !Array.isArray(value.messages) || value.messages.length > 50) return false;
+  if (value.mode === 'toolDetails') return boundedString(value.toolCallId, 200) && value.messages.length === 0 &&
+    (value.toolDetail === undefined || value.toolDetail && typeof value.toolDetail === 'object' && !Array.isArray(value.toolDetail) &&
+      value.toolDetail.callId === value.toolCallId && boundedString(value.toolDetail.name, 100) &&
+      ['pending', 'running', 'completed', 'error', 'unknown'].includes(value.toolDetail.status) &&
+      (value.toolDetail.title === undefined || boundedString(value.toolDetail.title, 120)) &&
+      (value.toolDetail.metadata === undefined || value.toolDetail.metadata && typeof value.toolDetail.metadata === 'object' &&
+        !Array.isArray(value.toolDetail.metadata) && Object.entries(value.toolDetail.metadata).length <= 8 &&
+        Object.entries(value.toolDetail.metadata).every(([key, item]) => ['count', 'limit', 'offset', 'page', 'maxResults', 'timeoutMs', 'recursive', 'includeHidden'].includes(key) &&
+          (typeof item === 'boolean' || Number.isSafeInteger(item) && item >= 0 && item <= 1_000_000))));
+  return (value.mode === undefined || value.mode === 'transcript') && value.messages.every(message => message &&
+    (message.id === undefined || boundedString(message.id, 200)) && ['user', 'assistant', 'unknown'].includes(message.role) &&
+    (message.timestamp === null || validTimestamp(message.timestamp)) && Array.isArray(message.parts) && message.parts.length <= 100 &&
+    message.parts.every(part => part && (part.type === 'text' && boundedString(part.text, 8000) ||
+      part.type === 'tool' && boundedString(part.name, 100) && ['pending', 'running', 'completed', 'error', 'unknown'].includes(part.status) ||
+      part.type === 'attachment' && part.available === false)));
 }
 function validTimestamp(value) { return value === null || boundedString(value, 40) && Number.isFinite(Date.parse(value)); }
 function validObservabilityEvent(event, reportInstanceId) {
@@ -101,6 +111,7 @@ function validReport(v) {
     (v.eventsPartial === undefined || typeof v.eventsPartial === 'boolean') &&
     (v.unassignedFileChangesPartial === undefined || typeof v.unassignedFileChangesPartial === 'boolean') &&
     (v.transcriptEnabled === undefined || typeof v.transcriptEnabled === 'boolean') &&
+    (v.toolDetailsEnabled === undefined || typeof v.toolDetailsEnabled === 'boolean') &&
     (v.machineId === undefined || boundedString(v.machineId, 100)) && boundedString(v.host, 200) &&
     (v.generationStartedAt === undefined || Number.isFinite(v.generationStartedAt)) &&
     (v.pid === undefined || Number.isInteger(v.pid)) &&
@@ -255,22 +266,30 @@ export function createServer({ token, transcriptToken = process.env.AGENTDASHBOA
         if (!canReadTranscripts(req)) return reply(403, { error: 'Session transcript access is disabled or unauthorized' });
         try {
           const value = await readJson(req, 4096);
+          const mode = value?.mode || 'transcript';
           if (!value || typeof value.instanceId !== 'string' || value.instanceId.length > 100 ||
-              typeof value.sessionId !== 'string' || value.sessionId.length > 200 || value.limit !== undefined && value.limit !== 50) {
+              typeof value.sessionId !== 'string' || value.sessionId.length > 200 || !['transcript', 'toolDetails'].includes(mode) ||
+              value.limit !== undefined && value.limit !== 50 || mode === 'toolDetails' &&
+                (typeof value.messageId !== 'string' || value.messageId.length > 200 || typeof value.toolCallId !== 'string' || value.toolCallId.length > 200)) {
             return reply(400, { error: 'Invalid transcript request' });
           }
           const instance = instances.get(value.instanceId);
           const session = instance?.sessions.find(item => item.id === value.sessionId);
-          if (!instance || now() - instance.lastSeen >= 20000 || instance.replaced || !instance.transcriptEnabled || !session || session.archived) {
+          const enabled = mode === 'toolDetails' ? instance?.toolDetailsEnabled : instance?.transcriptEnabled;
+          const observedTool = mode !== 'toolDetails' || instance?.events?.some(event => event.kind === 'toolActivity' &&
+            event.sessionId === value.sessionId && event.messageId === value.messageId && event.toolCallId === value.toolCallId);
+          if (!instance || now() - instance.lastSeen >= 20000 || instance.replaced || !enabled || !observedTool || !session || session.archived) {
             return reply(404, { error: 'Session transcript unavailable' });
           }
-          const existing = [...transcriptRequests.values()].find(item => item.instanceId === value.instanceId && item.sessionId === value.sessionId);
+          const existing = [...transcriptRequests.values()].find(item => item.instanceId === value.instanceId && item.sessionId === value.sessionId &&
+            item.mode === mode && item.messageId === value.messageId && item.toolCallId === value.toolCallId);
           if (existing) return reply(202, { requestId: existing.requestId, expiresAt: existing.expiresAt });
           if (transcriptRequests.size >= 20 || [...transcriptRequests.values()].filter(item => item.instanceId === value.instanceId).length >= 2) {
             return reply(429, { error: 'Transcript request queue is busy' });
           }
           const requestId = randomUUID(), expiresAt = now() + 15000;
-          transcriptRequests.set(requestId, { requestId, instanceId: value.instanceId, sessionId: value.sessionId, expiresAt });
+          transcriptRequests.set(requestId, { requestId, instanceId: value.instanceId, sessionId: value.sessionId, mode,
+            ...(mode === 'toolDetails' ? { messageId: value.messageId, toolCallId: value.toolCallId } : {}), expiresAt });
           return reply(202, { requestId, expiresAt });
         } catch (error) { return reply(error instanceof RangeError ? 413 : 400, { error: 'Invalid transcript request' }); }
       }
@@ -303,11 +322,13 @@ export function createServer({ token, transcriptToken = process.env.AGENTDASHBOA
           const result = await readJson(req, 256 * 1024);
           if (!validTranscriptResult(result)) return reply(400, { error: 'Invalid transcript response' });
           const request = transcriptRequests.get(result.requestId);
-          if (!request || request.expiresAt <= now() || request.instanceId !== result.instanceId || request.sessionId !== result.sessionId) {
+          if (!request || request.expiresAt <= now() || request.instanceId !== result.instanceId || request.sessionId !== result.sessionId ||
+              request.mode !== (result.mode || 'transcript') || request.mode === 'toolDetails' && request.toolCallId !== result.toolCallId) {
             return reply(404, { error: 'Transcript request expired or mismatched' });
           }
           const instance = instances.get(request.instanceId);
-          if (!instance || now() - instance.lastSeen >= 20000 || instance.replaced || !instance.transcriptEnabled ||
+          const enabled = request.mode === 'toolDetails' ? instance?.toolDetailsEnabled : instance?.transcriptEnabled;
+          if (!instance || now() - instance.lastSeen >= 20000 || instance.replaced || !enabled ||
               !instance.sessions.some(session => session.id === request.sessionId && !session.archived)) {
             transcriptRequests.delete(result.requestId);
             return reply(404, { error: 'Transcript session is no longer available' });
@@ -407,9 +428,10 @@ export function createServer({ token, transcriptToken = process.env.AGENTDASHBOA
             }
           }
           if (meaningfulChange || !replaced && !online) revision++;
-          const transcriptRequestsForInstance = v.transcriptEnabled ? [...transcriptRequests.values()]
+          const transcriptRequestsForInstance = v.transcriptEnabled || v.toolDetailsEnabled ? [...transcriptRequests.values()]
             .filter(item => item.instanceId === v.instanceId && item.expiresAt > now())
-            .map(({ requestId, sessionId, expiresAt }) => ({ requestId, sessionId, expiresAt, limit: 50 })) : [];
+            .map(({ requestId, sessionId, mode, messageId, toolCallId, expiresAt }) => ({ requestId, sessionId, mode,
+              ...(messageId ? { messageId } : {}), ...(toolCallId ? { toolCallId } : {}), expiresAt, limit: 50 })) : [];
           return reply(200, { ok: true, ...(transcriptRequestsForInstance.length ? { transcriptRequests: transcriptRequestsForInstance } : {}) });
         } catch { return reply(400, { error: 'Invalid JSON report' }); }
       }

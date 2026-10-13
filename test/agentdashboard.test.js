@@ -205,6 +205,46 @@ test('fetches transcript messages only after separate plugin opt-in and strips t
   assert.equal(reports.at(-1).transcriptEnabled, false);
   assert.equal(results.length, 0);
 });
+test('tool detail inspection returns only a safe title and allowlisted structured metadata', async t => {
+  const originalFetch = globalThis.fetch;
+  const keys = ['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'AGENTDASHBOARD_TELEMETRY', 'AGENTDASHBOARD_TRANSCRIPT_TOKEN', 'XDG_CONFIG_HOME'];
+  const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const config = await mkdtemp(join(tmpdir(), 'agentdashboard-tool-details-'));
+  const reports = [], results = [];
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(config, { recursive: true, force: true });
+  });
+  process.env.AGENTDASHBOARD_URL = 'http://127.0.0.1:4317';
+  delete process.env.AGENTDASHBOARD_TOKEN;
+  process.env.AGENTDASHBOARD_TELEMETRY = '{"git":false,"toolDetails":true}';
+  process.env.AGENTDASHBOARD_TRANSCRIPT_TOKEN = 'separate-transcript-access-key-32-chars';
+  process.env.XDG_CONFIG_HOME = config;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith('/api/transcript/result')) { results.push(JSON.parse(init.body)); return new Response('{"ok":true}', { status: 200 }); }
+    const payload = JSON.parse(init.body); reports.push(payload);
+    return new Response(JSON.stringify({ ok: true, transcriptRequests: payload.toolDetailsEnabled
+      ? [{ requestId: 'detail-request', sessionId: 'session', mode: 'toolDetails', messageId: 'message', toolCallId: 'call', expiresAt: Date.now() + 10000 }] : [] }), { status: 200 });
+  };
+  const client = { session: {
+    list: async () => ({ data: [{ id: 'session', directory: '/tmp' }] }),
+    status: async () => ({ data: {} }),
+    messages: async () => ({ data: [{ id: 'message', parts: [{ type: 'tool', callID: 'call', tool: 'read', state: {
+      status: 'completed', title: 'Read a document', input: { count: 3, recursive: true, path: '/private/file', command: 'PRIVATE_ARGUMENT' },
+      output: 'PRIVATE_RESULT',
+    } }] }] }),
+  } };
+  const plugin = await AgentDashboardPlugin({ directory: '/tmp', client });
+  t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
+  await plugin.event({ event: { type: 'message.part.updated', properties: { part: {
+    type: 'tool', sessionID: 'session', messageID: 'message', callID: 'call', tool: 'read', state: { status: 'completed' },
+  } } } });
+  for (let n = 0; n < 100 && !results.length; n++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(reports.at(-1).toolDetailsEnabled, true);
+  assert.deepEqual(results[0].toolDetail, { callId: 'call', name: 'read', status: 'completed', title: 'Read a document', metadata: { count: 3, recursive: true } });
+  assert.doesNotMatch(JSON.stringify(results[0]), /PRIVATE_ARGUMENT|PRIVATE_RESULT|\/private\/file|"path"/);
+});
 
 test('validates optional model metadata while accepting legacy sessions', async t => {
   const { request } = await start(t);
@@ -275,6 +315,32 @@ test('queues bounded on-demand transcripts and serves each private response once
   time += 16000;
   assert.equal((await request(`/api/transcript/result?requestId=${encodeURIComponent(expires.requestId)}`, { headers: browserHeaders })).status, 404,
     'an unfulfilled request expires from the in-memory queue');
+});
+test('authorizes safe tool details only for an observed tool call and validates the bounded response', async t => {
+  const transcriptToken = 'separate-transcript-access-key-32-chars';
+  const { request } = await start(t, { transcriptToken, trustProxy: true });
+  const headers = { origin: 'https://localhost:4317', 'x-forwarded-proto': 'https', 'x-agentdashboard-transcript-token': transcriptToken };
+  const value = report();
+  value.toolDetailsEnabled = true;
+  value.events = [{ sessionId: 'parent', messageId: 'message', toolCallId: 'call', timestamp: new Date().toISOString(), kind: 'toolActivity', summary: 'Tool activity' }];
+  assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 200);
+  const submit = body => request('/api/transcript/request', { method: 'POST', headers, body: JSON.stringify(body) });
+  const common = { instanceId: 'one', sessionId: 'parent', mode: 'toolDetails', messageId: 'message', toolCallId: 'call' };
+  assert.equal((await submit({ ...common, toolCallId: 'unobserved' })).status, 404);
+  const queuedResponse = await submit(common);
+  assert.equal(queuedResponse.status, 202);
+  const queued = await queuedResponse.json();
+  const heartbeat = await request('/api/report', { method: 'POST', body: JSON.stringify(value) });
+  assert.deepEqual((await heartbeat.json()).transcriptRequests.map(({ mode, messageId, toolCallId }) => [mode, messageId, toolCallId]),
+    [['toolDetails', 'message', 'call']]);
+  const result = { requestId: queued.requestId, instanceId: 'one', sessionId: 'parent', mode: 'toolDetails', toolCallId: 'call', available: true, partial: false,
+    messages: [], toolDetail: { callId: 'call', name: 'read', status: 'completed', title: 'Read document', metadata: { count: 2 } } };
+  const invalid = structuredClone(result);
+  invalid.toolDetail.metadata.path = '/private/path';
+  assert.equal((await request('/api/transcript/result', { method: 'POST', headers, body: JSON.stringify(invalid) })).status, 400);
+  assert.equal((await request('/api/transcript/result', { method: 'POST', headers, body: JSON.stringify(result) })).status, 200);
+  assert.equal((await request('/api/transcript/result', { method: 'POST', headers, body: JSON.stringify(result) })).status, 404,
+    'a response cannot be reused after delivery');
 });
 test('accumulates timeline intervals beyond report-buffer limits and retains ended descendants', async t => {
   const { request } = await start(t);
@@ -827,7 +893,7 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
   await git('commit', '-m', 'PRIVATE_COMMIT');
 
   for (const [category, forbidden] of [
-    ['titles', 'PRIVATE_TITLE'], ['tasks', 'PRIVATE_TASK'], ['toolActivity', 'PRIVATE_ACTIVITY'], ['modelMetrics', 'PRIVATE_MODEL'],
+    ['titles', 'PRIVATE_TITLE'], ['tasks', 'PRIVATE_TASK'], ['toolActivity', 'PRIVATE_ACTIVITY'], ['toolDetails', 'PRIVATE_TOOL_TITLE'], ['modelMetrics', 'PRIVATE_MODEL'],
     ['paths', root], ['git', 'PRIVATE_COMMIT'], ['permissionDetails', 'PRIVATE_PERMISSION_ID'],
   ]) {
     process.env.AGENTDASHBOARD_TELEMETRY = JSON.stringify({ [category]: false });
@@ -846,7 +912,7 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
       todos: [{ content: 'PRIVATE_TASK', status: 'pending' }],
     } } } });
     await plugin.event({ event: { type: 'message.part.updated', properties: {
-      part: { sessionID: 'session', messageID: 'private-message', id: 'private-part', callID: 'private-call', type: 'tool', tool: 'PRIVATE_ACTIVITY', state: { status: 'running', input: { command: 'RAW_TOOL_ARGUMENT' }, output: 'RAW_TOOL_OUTPUT' } },
+      part: { sessionID: 'session', messageID: 'private-message', id: 'private-part', callID: 'private-call', type: 'tool', tool: 'PRIVATE_ACTIVITY', state: { status: 'running', title: 'PRIVATE_TOOL_TITLE', input: { command: 'RAW_TOOL_ARGUMENT' }, output: 'RAW_TOOL_OUTPUT' } },
     } } });
     await plugin.event({ event: { type: 'todo.updated', properties: { sessionID: 'session', todos: [{ content: 'PRIVATE_TASK', status: 'pending' }] } } });
     await plugin.event({ event: { type: 'permission.asked', properties: {
@@ -874,6 +940,7 @@ test('each telemetry privacy category is filtered from the outgoing report paylo
     assert.ok(!payload.includes('/private/command'));
     assert.ok(!payload.includes('PRIVATE_SOURCE_CONTENT'));
     if (category === 'toolActivity') assert.ok(!sent.events?.some(event => event.kind === 'toolActivity'));
+    if (category === 'toolDetails') assert.equal(sent.toolDetailsEnabled, false);
     if (category === 'permissionDetails') {
       assert.equal(sent.sessions[0].permissions, undefined);
       assert.ok(!sent.events?.some(event => event.attributes?.permissionId));

@@ -1122,8 +1122,18 @@ test('uses Tauri native notifications when available and focuses the dashboard o
 });
 
 test('execution timeline is collapsed, accessible, and retains state across polling', async ({ page }) => {
+  let detailRequests = 0;
+  await page.route('**/api/transcript/request', async route => {
+    detailRequests++;
+    expect(route.request().postDataJSON()).toMatchObject({ mode: 'toolDetails', messageId: 'message-1', toolCallId: 'call-1' });
+    await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ requestId: 'detail-1', expiresAt: Date.now() + 5000 }) });
+  });
+  await page.route('**/api/transcript/result**', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+    available: true, toolDetail: { title: '<img src=x onerror=alert(1)>', metadata: { count: 4, recursive: false } },
+  }) }));
   await installStateFixture(page, () => {
     const state = report();
+    state.instances[0].toolDetailsEnabled = true;
     state.instances[0].sessions[0].lastCompactedAt = '2026-10-12T10:00:03Z';
     state.instances[0].sessions[0].contextEstimateAt = '2026-10-12T09:58:00Z';
     state.instances[0].sessions[0].compactionCount = 1;
@@ -1159,6 +1169,14 @@ test('execution timeline is collapsed, accessible, and retains state across poll
   ]);
   await expect(toolDetails.locator('.tool-category-summary')).toContainText('bash · 1 call · recorded 3.0 s');
   await expect(toolDetails.locator('ol')).toContainText('start time unavailable');
+  await page.getByText('Filter agents', { exact: true }).click();
+  await page.locator('#tool-details-enabled').check();
+  await page.locator('#session-log-token').fill('separate-inspection-access-key');
+  await toolDetails.getByRole('button', { name: 'Reveal safe details' }).first().click();
+  await expect(toolDetails.getByText('<img src=x onerror=alert(1)>', { exact: true })).toBeVisible();
+  await expect(toolDetails.locator('img')).toHaveCount(0);
+  await expect(toolDetails).toContainText('Safe metadata · count: 4 · recursive: false');
+  expect(detailRequests).toBe(1);
   const timeline = root.locator('.execution-timeline');
   await expect(timeline).toBeVisible();
   await expect(timeline.locator('> summary')).toHaveText('Execution timeline');
