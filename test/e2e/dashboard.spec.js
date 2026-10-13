@@ -565,6 +565,77 @@ test('shows multiple safe permission requests and correlated outcomes on descend
   await expect(child).not.toContainText('opaque-permission-1');
 });
 
+test('fetches bounded session messages only after opt-in, authorization and expansion', async ({ page }) => {
+  let requestCount = 0, resultPolls = 0, requestPayload;
+  await installStateFixture(page, () => {
+    const state = report('Transcript safely', 'busy');
+    state.instances[0].transcriptEnabled = true;
+    return state;
+  });
+  await page.route('**/api/transcript/request', async route => {
+    requestCount++;
+    requestPayload = route.request().postDataJSON();
+    await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ requestId: 'request-1', expiresAt: Date.now() + 10000 }) });
+  });
+  await page.route('**/api/transcript/result**', async route => {
+    resultPolls++;
+    if (resultPolls === 1) return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ pending: true }) });
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      requestId: 'request-1', instanceId: 'instance-alpha', sessionId: 'root-alpha', available: true, partial: false,
+      messages: [
+        { id: 'user-1', role: 'user', timestamp: '2026-10-12T10:00:00Z', parts: [{ type: 'text', text: '<img src=x onerror=alert(1)>' }] },
+        { id: 'assistant-1', role: 'assistant', timestamp: null, parts: [
+          { type: 'text', text: 'Answer shown as text' }, { type: 'tool', name: 'bash', status: 'completed' },
+        ] },
+      ],
+    }) });
+  });
+  await page.goto('/');
+  expect(requestCount).toBe(0, 'collapsed views do not fetch transcript data');
+  await page.getByText('Filter agents', { exact: true }).click();
+  await page.locator('#session-log-enabled').check();
+  await page.locator('#session-log-token').fill('separate-transcript-key-value');
+  expect(requestCount).toBe(0, 'settings opt-in alone does not fetch messages');
+  const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  await root.locator(':scope > summary').click();
+  const transcript = root.locator(':scope > article.session-card > details.session-transcript');
+  await expect(transcript.locator('> summary')).toContainText('collapsed; expands on explicit request');
+  expect(requestCount).toBe(0);
+  await transcript.locator('> summary').click();
+  await expect.poll(() => requestCount).toBe(1);
+  await expect(transcript.locator('> summary')).toContainText('Session log · 2 messages');
+  expect(requestPayload).toEqual({ instanceId: 'instance-alpha', sessionId: 'root-alpha', limit: 50 });
+  await expect(transcript.getByText('<img src=x onerror=alert(1)>', { exact: true })).toBeVisible();
+  await expect(transcript.locator('img')).toHaveCount(0);
+  await expect(transcript).toContainText('Tool bash · completed');
+  await expect(transcript).toContainText('Answer shown as text');
+  await expect(transcript).not.toContainText('arguments or output');
+});
+
+test('cancels an on-demand session-log request when its disclosure is folded', async ({ page }) => {
+  let cancelCalls = 0;
+  await installStateFixture(page, () => { const state = report(); state.instances[0].transcriptEnabled = true; return state; });
+  await page.route('**/api/transcript/request', route => route.fulfill({ status: 202, contentType: 'application/json',
+    body: JSON.stringify({ requestId: 'cancel-me', expiresAt: Date.now() + 10000 }) }));
+  await page.route('**/api/transcript/result', route => route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ pending: true }) }));
+  await page.route('**/api/transcript/cancel', async route => {
+    cancelCalls++;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  await page.goto('/');
+  await page.getByText('Filter agents', { exact: true }).click();
+  await page.locator('#session-log-enabled').check();
+  await page.locator('#session-log-token').fill('separate-transcript-key-value');
+  const root = page.locator('[data-agent-key="instance-alpha:root-alpha"]');
+  await root.locator(':scope > summary').click();
+  const transcript = root.locator(':scope > article.session-card > details.session-transcript');
+  await transcript.locator('> summary').click();
+  await expect.poll(() => page.evaluate(() => document.querySelector('.session-transcript[open]') !== null)).toBe(true);
+  await expect.poll(() => cancelCalls).toBe(0);
+  await transcript.locator('> summary').click();
+  await expect.poll(() => cancelCalls).toBe(1);
+});
+
 test('shows latest attributed file-change snapshot and unassigned workspace changes separately', async ({ page }) => {
   await installStateFixture(page, () => {
     const state = report('File changes', 'busy');

@@ -3,6 +3,11 @@ const $ = id => document.getElementById(id);
 let token = '', instances = [], revision = null, pending = false, authRequired = false;
 let notificationEnabled = false, initializedAttention = false;
 let nativeNotificationActionRegistered = false;
+let transcriptOptIn = false, transcriptAccessToken = '';
+const transcriptStates = new Map();
+const transcriptRequestsInFlight = new Set();
+const transcriptRequestIds = new Map();
+const transcriptCancelled = new Set();
 const previousStatuses = new Map();
 const originalTitle = document.title;
 const numberFormat = new Intl.NumberFormat();
@@ -728,6 +733,37 @@ function render() {
         else lifecycleList.append(el('li', 'Task-call correlation unavailable; parent relationship is observed from session metadata'));
         delegationDetails.append(lifecycleList); card.append(delegationDetails);
       }
+      const transcriptKey = `${i.instanceId}:${s.id}`;
+      const transcriptState = transcriptStates.get(transcriptKey);
+      const transcript = el('details', undefined, 'session-transcript');
+      transcript.dataset.agentKey = `transcript:${transcriptKey}`;
+      const transcriptSummary = transcriptState?.status === 'ready'
+        ? `Session log · ${transcriptState.messages.length} messages${transcriptState.partial ? ' · partial' : ''}`
+        : !i.transcriptEnabled ? 'Session log · unavailable on this plugin'
+          : transcriptState?.status === 'loading' ? 'Session log · loading'
+            : 'Session log · collapsed; expands on explicit request';
+      transcript.append(el('summary', transcriptSummary, 'session-transcript-summary'));
+      transcript.addEventListener('toggle', () => {
+        if (transcript.open && transcriptState?.status !== 'ready' && transcriptState?.status !== 'loading') void loadSessionTranscript(i, s);
+        else if (!transcript.open && transcriptRequestsInFlight.has(transcriptKey)) void cancelSessionTranscript(i, s);
+      });
+      if (transcriptState?.message) transcript.append(el('p', transcriptState.message, 'transcript-status'));
+      if (transcriptState?.status === 'ready') {
+        const messages = el('ol', undefined, 'transcript-messages');
+        for (const message of transcriptState.messages) {
+          const item = el('li', undefined, 'transcript-message');
+          const time = message.timestamp ? ` · ${formatTimestamp(message.timestamp)}` : ' · time unavailable';
+          item.append(el('strong', `${message.role}${time}`));
+          for (const part of message.parts) {
+            if (part.type === 'text') item.append(el('p', part.text, 'transcript-text'));
+            else if (part.type === 'tool') item.append(el('p', `Tool ${part.name} · ${part.status}`, 'transcript-tool'));
+            else item.append(el('p', 'Attachment content unavailable in the session log view.', 'transcript-status'));
+          }
+          messages.append(item);
+        }
+        transcript.append(messages);
+      }
+      card.append(transcript);
       if (i.git?.root && !s.parentID) {
         const details = el('details'); details.dataset.instance = i.instanceId; details.append(el('summary', gitSummary(i.git)));
         const grid = el('div', undefined, 'git-grid');
@@ -946,6 +982,69 @@ function updateAttentionNotifications(nextInstances) {
     void dispatchAttentionNotification(title, body, rootIdentity);
   }
 }
+async function loadSessionTranscript(instance, session) {
+  const key = `${instance.instanceId}:${session.id}`;
+  if (transcriptRequestsInFlight.has(key) || transcriptStates.get(key)?.status === 'ready') return;
+  transcriptCancelled.delete(key);
+  if (!transcriptOptIn) transcriptStates.set(key, { status: 'blocked', message: 'Enable Session log access in Filter agents to request messages.' });
+  else if (!transcriptAccessToken) transcriptStates.set(key, { status: 'blocked', message: 'Enter the separate session log access key in Filter agents.' });
+  else if (!instance.transcriptEnabled) transcriptStates.set(key, { status: 'unavailable', message: 'Session logs are not enabled by the monitored OpenCode plugin.' });
+  else {
+    transcriptRequestsInFlight.add(key);
+    transcriptStates.set(key, { status: 'loading', message: 'Requesting messages from the monitored instance…' });
+    render();
+    try {
+      const headers = { 'content-type': 'application/json', 'x-agentdashboard-transcript-token': transcriptAccessToken };
+      if (token) headers.authorization = `Bearer ${token}`;
+      const request = await fetch('/api/transcript/request', {
+        method: 'POST', headers, body: JSON.stringify({ instanceId: instance.instanceId, sessionId: session.id, limit: 50 }),
+        signal: AbortSignal.timeout(4000),
+      });
+      if (request.status !== 202) throw new Error('unavailable');
+      const { requestId, expiresAt } = await request.json();
+      transcriptRequestIds.set(key, requestId);
+      if (transcriptCancelled.has(key)) {
+        await cancelSessionTranscript(instance, session);
+        throw new Error('cancelled');
+      }
+      let result;
+      while (Date.now() < expiresAt) {
+        if (transcriptCancelled.has(key)) throw new Error('cancelled');
+        await new Promise(resolve => setTimeout(resolve, 300));
+        const response = await fetch(`/api/transcript/result?requestId=${encodeURIComponent(requestId)}`, {
+          headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'x-agentdashboard-transcript-token': transcriptAccessToken },
+          signal: AbortSignal.timeout(4000),
+        });
+        if (response.status === 200) { result = await response.json(); break; }
+        if (response.status !== 202) throw new Error('unavailable');
+      }
+      if (!result) throw new Error('expired');
+      transcriptStates.set(key, result.available ? { status: 'ready', ...result }
+        : { status: 'unavailable', message: 'This OpenCode instance cannot provide session messages.' });
+    } catch (error) {
+      const cancelled = error.message === 'cancelled' || transcriptCancelled.has(key);
+      transcriptStates.set(key, { status: cancelled ? 'cancelled' : 'unavailable', message: error.message === 'expired'
+        ? 'Session log request expired; expand to try again.' : cancelled ? 'Session log request cancelled.' : 'Session log is unavailable from this instance.' });
+    } finally {
+      transcriptRequestsInFlight.delete(key);
+      transcriptRequestIds.delete(key); transcriptCancelled.delete(key);
+      render();
+    }
+    return;
+  }
+  render();
+}
+async function cancelSessionTranscript(instance, session) {
+  const key = `${instance.instanceId}:${session.id}`;
+  transcriptCancelled.add(key);
+  transcriptStates.set(key, { status: 'cancelled', message: 'Cancelling session log request…' });
+  const requestId = transcriptRequestIds.get(key);
+  if (!requestId) return;
+  const headers = { 'content-type': 'application/json', 'x-agentdashboard-transcript-token': transcriptAccessToken };
+  if (token) headers.authorization = `Bearer ${token}`;
+  await fetch('/api/transcript/cancel', { method: 'POST', headers,
+    body: JSON.stringify({ requestId, instanceId: instance.instanceId, sessionId: session.id }), signal: AbortSignal.timeout(3000) }).catch(() => {});
+}
 function updateTrayStatus(status) {
   const invoke = globalThis.__TAURI__?.core?.invoke;
   if (invoke) void invoke('update_tray_status', { status }).catch(() => {});
@@ -1002,6 +1101,15 @@ $('notifications').addEventListener('change', async event => {
     event.target.checked = false; notificationEnabled = false;
     $('notifications-help').textContent = 'Notification permission was not granted.';
   } else if (native?.sendNotification) registerNativeNotificationActions();
+});
+$('session-log-enabled').addEventListener('change', event => {
+  transcriptOptIn = event.target.checked;
+  if (!transcriptOptIn) transcriptStates.clear();
+  render();
+});
+$('session-log-token').addEventListener('input', event => {
+  if (transcriptAccessToken !== event.target.value) transcriptStates.clear();
+  transcriptAccessToken = event.target.value;
 });
 $('tab-count').addEventListener('change', () => {
   if (!$('tab-count').checked) document.title = originalTitle;
