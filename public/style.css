@@ -92,6 +92,10 @@ footer a:hover { color: var(--text); }
 .filter-option input { flex: none; width: 16px; height: 16px; margin: 3px 0 0; padding: 0; accent-color: var(--accent); cursor: pointer; }
 .filter-option strong { display: block; font-size: 12px; font-weight: 600; }
 .filter-option small { display: block; font-size: 11px; margin-top: 4px; line-height: 1.6; }
+.session-log-key-option { grid-column: span 2; align-items: center; }
+.session-log-key-option input[type="password"] { width: min(100%, 280px); height: 38px; margin: 0; padding: 8px 10px; flex: 1; }
+.session-log-key-option { grid-column: span 2; align-items: center; }
+.session-log-key-option input[type="password"] { width: min(100%, 280px); height: 38px; margin: 0; padding: 8px 10px; flex: 1; }
 
 /* Status groups and agent cards. */
 .session-group { margin: 28px 0; scroll-margin-top: 20px; }
@@ -309,6 +313,8 @@ article.session-card:not(:has(.session)) { padding: 18px 22px; }
   .search-field { width: 100%; max-width: none; }
   .filter-panel { padding: 20px; }
   .filter-options { grid-template-columns: 1fr; gap: 20px; }
+  .session-log-key-option { grid-column: auto; align-items: flex-start; }
+  .session-log-key-option { grid-column: auto; align-items: flex-start; }
   .group-heading { gap: 3px; flex-direction: column; }
   .group-heading p { padding-left: 15px; }
   .session { padding: 18px; gap: 14px; flex-direction: column-reverse; }

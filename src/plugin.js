@@ -9,7 +9,8 @@ import { createActivityBuffer } from './activity-events.js';
 import { buildExecutionTimeline } from './execution-timeline.js';
 const exec = promisify(execFile);
 
-const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics', 'permissionDetails', 'mcpHealth', 'lspHealth'];
+const TELEMETRY_CATEGORIES = ['titles', 'tasks', 'toolActivity', 'paths', 'git', 'modelMetrics', 'permissionDetails', 'mcpHealth', 'lspHealth', 'sessionTranscript'];
+const DEFAULT_DISABLED_CATEGORIES = new Set(['sessionTranscript']);
 const MAX_USAGE_MESSAGES = 100;
 const USAGE_KEYS = [['input', 'input'], ['output', 'output'], ['reasoning', 'reasoning'], ['cacheRead', 'cache', 'read'], ['cacheWrite', 'cache', 'write']];
 const permissionTitles = {
@@ -159,8 +160,42 @@ function diagnosticSeverity(value) {
   if (value === 4 || typeof value === 'string' && /hint/i.test(value)) return 'hints';
   return undefined;
 }
+function sanitizeTranscript(response) {
+  const rawMessages = response?.data?.messages ?? response?.data ?? response?.messages ?? response;
+  if (!Array.isArray(rawMessages)) return { available: false, partial: true, messages: [] };
+  const timestamped = rawMessages.map(message => ({ message, timestamp: suppliedTimestamp(message?.time?.created ?? message?.time?.completed)?.timestamp }));
+  const ordered = timestamped.every(item => item.timestamp)
+    ? timestamped.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)).map(item => item.message)
+    : rawMessages;
+  const selected = ordered.slice(-50);
+  let budget = 48_000, partial = rawMessages.length > selected.length;
+  const messages = selected.map(message => {
+    const role = ['user', 'assistant'].includes(message?.role) ? message.role : 'unknown';
+    const timestamp = suppliedTimestamp(message?.time?.created ?? message?.time?.completed)?.timestamp || null;
+    const parts = [];
+    const sourceParts = Array.isArray(message?.parts) ? message.parts : typeof message?.content === 'string'
+      ? [{ type: 'text', text: message.content }] : [];
+    if (sourceParts.length > 100) partial = true;
+    for (const part of sourceParts.slice(0, 100)) {
+      if (part?.type === 'text' && typeof part.text === 'string') {
+        const text = part.text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+        const content = text.slice(0, Math.min(4000, budget));
+        if (content.length < text.length) partial = true;
+        budget -= content.length;
+        if (content) parts.push({ type: 'text', text: content });
+      } else if (part?.type === 'tool') {
+        const status = ['pending', 'running', 'completed', 'error'].includes(part.state?.status) ? part.state.status : 'unknown';
+        parts.push({ type: 'tool', name: safeMcpName(part.tool), status });
+      } else if (['file', 'image', 'binary'].includes(part?.type)) parts.push({ type: 'attachment', available: false });
+      if (budget <= 0) { partial = true; break; }
+    }
+    if (typeof message?.id !== 'string') partial = true;
+    return { ...(typeof message?.id === 'string' && message.id.length <= 200 ? { id: message.id } : {}), role, timestamp, parts };
+  });
+  return { available: true, partial, messages };
+}
 function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
-  if (value === undefined || value === '') return Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, true]));
+  if (value === undefined || value === '') return Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, !DEFAULT_DISABLED_CATEGORIES.has(category)]));
   let config;
   try { config = JSON.parse(value); } catch { throw new Error('AGENTDASHBOARD_TELEMETRY must be valid JSON'); }
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('AGENTDASHBOARD_TELEMETRY must be an object');
@@ -171,12 +206,12 @@ function telemetryConfig(value = process.env.AGENTDASHBOARD_TELEMETRY) {
   }
   const categories = config.profile === 'status-only'
     ? Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, false]))
-    : Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, config[category] ?? true]));
+    : Object.fromEntries(TELEMETRY_CATEGORIES.map(category => [category, config[category] ?? !DEFAULT_DISABLED_CATEGORIES.has(category)]));
   // Git snapshots contain paths (root, filenames, and worktree locations).
   if (!categories.paths) categories.git = false;
   return categories;
 }
-function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events, eventsPartial, timeline, unassignedFileCount, unassignedFileChangesPartial, mcpHealth, lspHealth }, privacy) {
+function privateReport({ instanceId, machineId, generationStartedAt, host, pid, directory, worktree, sessions, git, events, eventsPartial, timeline, unassignedFileCount, unassignedFileChangesPartial, mcpHealth, lspHealth, transcriptEnabled }, privacy) {
   const report = { instanceId, machineId, generationStartedAt, host, pid, sessions: sessions.map(session => {
     const result = { id: session.id, status: session.status };
     if (session.parentID) result.parentID = session.parentID;
@@ -220,6 +255,7 @@ function privateReport({ instanceId, machineId, generationStartedAt, host, pid, 
   if (unassignedFileChangesPartial) report.unassignedFileChangesPartial = true;
   if (privacy.mcpHealth && mcpHealth) report.mcpHealth = mcpHealth;
   if (privacy.lspHealth && lspHealth) report.lspHealth = lspHealth;
+  report.transcriptEnabled = Boolean(transcriptEnabled);
   if (privacy.paths) { report.directory = directory; report.worktree = worktree; }
   if (privacy.git) report.git = git;
   return report;
@@ -289,16 +325,22 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
   let endpoint;
   try { endpoint = new URL(process.env.AGENTDASHBOARD_URL || 'http://127.0.0.1:4317'); } catch { return {}; }
   const token = process.env.AGENTDASHBOARD_TOKEN;
+  const transcriptToken = process.env.AGENTDASHBOARD_TRANSCRIPT_TOKEN;
   // Without a secret, telemetry must never leave this computer.
   if (!['http:', 'https:'].includes(endpoint.protocol)) return {};
   if (!token) {
     if (!['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname)) return {};
     if (endpoint.hostname === 'localhost') endpoint.hostname = '127.0.0.1';
   }
+  const loopbackEndpoint = ['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname);
+  const transcriptEnabled = Boolean(privacy.sessionTranscript && transcriptToken?.length >= 24 && transcriptToken !== token &&
+    (loopbackEndpoint || endpoint.protocol === 'https:'));
   const instanceId = randomUUID();
   const generationStartedAt = Date.now();
   const machine = await machineId();
   const sessions = new Map();
+  const transcriptRequestsInFlight = new Set();
+  const transcriptResultCache = new Map();
   const unassignedFileKeys = new Set();
   let unassignedFileChangesPartial = false;
   let providerModelsPromise;
@@ -387,6 +429,43 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
       };
     }).finally(() => { lspInFlight = false; scheduleReport(); });
   };
+  const processTranscriptRequest = async request => {
+    if (!transcriptEnabled || stopped || !request || typeof request.requestId !== 'string' || typeof request.sessionId !== 'string' ||
+        request.expiresAt <= Date.now() || transcriptRequestsInFlight.has(request.requestId)) return;
+    transcriptRequestsInFlight.add(request.requestId);
+    try {
+      let cached = transcriptResultCache.get(request.requestId);
+      if (cached?.expiresAt <= Date.now()) { transcriptResultCache.delete(request.requestId); cached = undefined; }
+      let result = cached;
+      if (!result) {
+        const currentSession = sessions.get(request.sessionId);
+        let transcript = { available: false, partial: true, messages: [] };
+        if (currentSession && typeof client?.session?.messages === 'function') {
+          try {
+            const response = await Promise.race([client.session.messages({ path: { id: request.sessionId } }), new Promise((_, reject) => {
+              const timer = setTimeout(() => reject(new Error('timeout')), 2500); timer.unref?.();
+            })]);
+            transcript = sanitizeTranscript(response);
+          } catch { transcript = { available: false, partial: true, messages: [] }; }
+        }
+        result = { requestId: request.requestId, instanceId, sessionId: request.sessionId, ...transcript };
+        cached = { ...result, expiresAt: Math.min(request.expiresAt, Date.now() + 10000) };
+        transcriptResultCache.set(request.requestId, cached);
+        while (transcriptResultCache.size > 10) transcriptResultCache.delete(transcriptResultCache.keys().next().value);
+      } else result = { requestId: cached.requestId, instanceId: cached.instanceId, sessionId: cached.sessionId,
+        available: cached.available, partial: cached.partial, messages: cached.messages };
+      if (request.expiresAt <= Date.now()) return;
+      const response = await fetch(new URL('/api/transcript/result', endpoint), {
+        method: 'POST', redirect: 'error',
+        headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'x-agentdashboard-transcript-token': transcriptToken,
+          'content-type': 'application/json' },
+        body: JSON.stringify(result), signal: AbortSignal.timeout(3000),
+      });
+      await response.body?.cancel();
+      if (response.ok) transcriptResultCache.delete(request.requestId);
+    } catch { /* Transcript retrieval never affects agent execution or heartbeat handling. */ }
+    finally { transcriptRequestsInFlight.delete(request.requestId); }
+  };
   const updatePermissionRequest = (s, permission, updated = false) => {
     const idValue = permission?.id || permission?.permissionID || permission?.permissionId;
     const id = typeof idValue === 'string' && idValue.length <= 200 ? idValue : undefined;
@@ -463,13 +542,16 @@ export const AgentDashboardPlugin = async ({ directory, worktree, client }) => {
           directory, worktree, sessions: [...sessions.values()], git: gitInfo, events: activityEvents.snapshot(),
           timeline: buildExecutionTimeline(activityEvents.snapshot(), [...sessions.values()], activityEvents.truncated),
           eventsPartial: activityEvents.truncated,
-          unassignedFileCount: unassignedFileKeys.size, unassignedFileChangesPartial, mcpHealth, lspHealth }, privacy)), signal: AbortSignal.timeout(3000),
+          unassignedFileCount: unassignedFileKeys.size, unassignedFileChangesPartial, mcpHealth, lspHealth, transcriptEnabled }, privacy)), signal: AbortSignal.timeout(3000),
       });
       if (!response.ok) {
         await response.body?.cancel();
         return;
       }
-      await response.body?.cancel();
+      const responseData = await response.json().catch(() => undefined);
+      if (transcriptEnabled && Array.isArray(responseData?.transcriptRequests)) {
+        for (const request of responseData.transcriptRequests) void processTranscriptRequest(request);
+      }
       succeeded = true;
     } catch (error) {
       // Monitoring outages do not interrupt agent execution. Next heartbeat retries.

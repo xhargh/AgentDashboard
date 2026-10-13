@@ -17,7 +17,7 @@ async function start(t, options = {}) {
     const target = new URL(input, url);
     const req = Readable.from(init.body ? [Buffer.from(init.body)] : []);
     req.socket = { remoteAddress: init.remoteAddress || '127.0.0.1' };
-    req.url = target.pathname; req.method = init.method || 'GET';
+    req.url = target.pathname + target.search; req.method = init.method || 'GET';
     req.headers = { host: 'localhost:4317', ...init.headers };
     return new Promise(resolve => {
       let status = 200; const headers = {};
@@ -149,6 +149,62 @@ test('reports assistant model metadata per session and filters it at the outboun
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(!JSON.stringify(reports.at(-1)).includes('private-model'));
 });
+test('fetches transcript messages only after separate plugin opt-in and strips tool payloads', async t => {
+  const originalFetch = globalThis.fetch;
+  const keys = ['AGENTDASHBOARD_URL', 'AGENTDASHBOARD_TOKEN', 'AGENTDASHBOARD_TELEMETRY', 'AGENTDASHBOARD_TRANSCRIPT_TOKEN', 'XDG_CONFIG_HOME'];
+  const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const config = await mkdtemp(join(tmpdir(), 'agentdashboard-transcript-'));
+  const reports = [], results = [];
+  let messageCalls = 0;
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(old)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(config, { recursive: true, force: true });
+  });
+  process.env.AGENTDASHBOARD_URL = 'http://127.0.0.1:4317';
+  delete process.env.AGENTDASHBOARD_TOKEN;
+  process.env.AGENTDASHBOARD_TELEMETRY = '{"git":false,"sessionTranscript":true}';
+  process.env.AGENTDASHBOARD_TRANSCRIPT_TOKEN = 'separate-transcript-access-key-32-chars';
+  process.env.XDG_CONFIG_HOME = config;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith('/api/transcript/result')) { results.push(JSON.parse(init.body)); return new Response('{"ok":true}', { status: 200 }); }
+    const payload = JSON.parse(init.body); reports.push(payload);
+    return new Response(JSON.stringify({ ok: true, transcriptRequests: payload.transcriptEnabled
+      ? [{ requestId: 'request-1', instanceId: payload.instanceId, sessionId: 'session', expiresAt: Date.now() + 10000 }] : [] }), { status: 200 });
+  };
+  const client = { session: {
+    list: async () => ({ data: [{ id: 'session', title: 'Transcript test', directory: '/tmp' }] }),
+    status: async () => ({ data: {} }),
+    messages: async () => {
+      messageCalls++;
+      return { data: [
+        { id: 'user-message', role: 'user', time: { created: Date.now() }, parts: [{ type: 'text', text: '<script>prompt</script>' }] },
+        { id: 'assistant-message', role: 'assistant', parts: [
+          { type: 'text', text: 'Safe answer' },
+          { type: 'tool', tool: 'bash', state: { status: 'completed', input: { command: 'PRIVATE_ARGUMENT' }, output: 'PRIVATE_RESULT' } },
+        ] },
+      ] };
+    },
+  } };
+  const plugin = await AgentDashboardPlugin({ directory: '/tmp', client });
+  t.after(() => plugin.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
+  for (let n = 0; n < 100 && !results.length; n++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(reports[0].transcriptEnabled, true);
+  assert.equal(messageCalls, 1);
+  assert.equal(results[0].messages.length, 2);
+  assert.equal(results[0].messages[0].parts[0].text, '<script>prompt</script>');
+  assert.deepEqual(results[0].messages[1].parts[1], { type: 'tool', name: 'bash', status: 'completed' });
+  assert.doesNotMatch(JSON.stringify(results[0]), /PRIVATE_ARGUMENT|PRIVATE_RESULT/);
+
+  process.env.AGENTDASHBOARD_TELEMETRY = '{"git":false}';
+  results.length = 0;
+  const disabled = await AgentDashboardPlugin({ directory: '/tmp', client });
+  t.after(() => disabled.event({ event: { type: 'server.instance.disposed', properties: { directory: '/tmp' } } }));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(messageCalls, 1, 'transcript SDK calls are disabled unless the separate privacy category is enabled');
+  assert.equal(reports.at(-1).transcriptEnabled, false);
+  assert.equal(results.length, 0);
+});
 
 test('validates optional model metadata while accepting legacy sessions', async t => {
   const { request } = await start(t);
@@ -181,6 +237,44 @@ test('accepts older reports and validates optional bounded timeline payloads', a
   assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 200);
   value.events.push(value.events[0]);
   assert.equal((await request('/api/report', { method: 'POST', body: JSON.stringify(value) })).status, 400);
+});
+test('queues bounded on-demand transcripts and serves each private response once', async t => {
+  const transcriptToken = 'separate-transcript-access-key-32-chars';
+  let time = Date.now();
+  const { request } = await start(t, { transcriptToken, trustProxy: true, now: () => time });
+  const send = value => request('/api/report', { method: 'POST', body: JSON.stringify(value) });
+  const browserHeaders = { origin: 'https://localhost:4317', 'x-forwarded-proto': 'https', 'x-agentdashboard-transcript-token': transcriptToken };
+  const value = report(); value.transcriptEnabled = true;
+  assert.equal((await send(value)).status, 200);
+  assert.equal((await request('/api/transcript/request', { method: 'POST', headers: { ...browserHeaders, 'x-forwarded-proto': 'http' },
+    body: JSON.stringify({ instanceId: 'one', sessionId: 'parent', limit: 50 }) })).status, 403);
+  assert.equal((await request('/api/transcript/request', { method: 'POST', headers: { origin: 'https://localhost:4317', 'x-forwarded-proto': 'https' },
+    body: JSON.stringify({ instanceId: 'one', sessionId: 'parent', limit: 50 }) })).status, 403);
+  const queuedResponse = await request('/api/transcript/request', { method: 'POST', headers: browserHeaders,
+    body: JSON.stringify({ instanceId: 'one', sessionId: 'parent', limit: 50 }) });
+  assert.equal(queuedResponse.status, 202);
+  const queued = await queuedResponse.json();
+  const heartbeat = await send(value);
+  assert.deepEqual((await heartbeat.json()).transcriptRequests.map(({ requestId, sessionId }) => [requestId, sessionId]), [[queued.requestId, 'parent']]);
+  const result = { requestId: queued.requestId, instanceId: 'one', sessionId: 'parent', available: true, partial: false, messages: [
+    { id: 'message', role: 'assistant', timestamp: null, parts: [{ type: 'text', text: '<img src=x onerror=alert(1)>' }, { type: 'tool', name: 'bash', status: 'completed' }] },
+  ] };
+  assert.equal((await request('/api/transcript/result', { method: 'POST', headers: browserHeaders, body: JSON.stringify(result) })).status, 200);
+  const resultResponse = await request(`/api/transcript/result?requestId=${encodeURIComponent(queued.requestId)}`, { headers: browserHeaders });
+  assert.equal(resultResponse.status, 200);
+  assert.deepEqual(await resultResponse.json(), result);
+  assert.equal((await request(`/api/transcript/result?requestId=${encodeURIComponent(queued.requestId)}`, { headers: browserHeaders })).status, 404,
+    'transcript responses can only be fetched once');
+  const cancelled = await (await request('/api/transcript/request', { method: 'POST', headers: browserHeaders,
+    body: JSON.stringify({ instanceId: 'one', sessionId: 'parent', limit: 50 }) })).json();
+  assert.equal((await request('/api/transcript/cancel', { method: 'POST', headers: browserHeaders,
+    body: JSON.stringify({ requestId: cancelled.requestId, instanceId: 'one', sessionId: 'parent' }) })).status, 200);
+  assert.equal((await request(`/api/transcript/result?requestId=${encodeURIComponent(cancelled.requestId)}`, { headers: browserHeaders })).status, 404);
+  const expires = await (await request('/api/transcript/request', { method: 'POST', headers: browserHeaders,
+    body: JSON.stringify({ instanceId: 'one', sessionId: 'parent', limit: 50 }) })).json();
+  time += 16000;
+  assert.equal((await request(`/api/transcript/result?requestId=${encodeURIComponent(expires.requestId)}`, { headers: browserHeaders })).status, 404,
+    'an unfulfilled request expires from the in-memory queue');
 });
 test('accumulates timeline intervals beyond report-buffer limits and retains ended descendants', async t => {
   const { request } = await start(t);

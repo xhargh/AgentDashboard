@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
@@ -31,6 +31,16 @@ function validUsage(usage) {
     ['input', 'output', 'reasoning', 'cacheRead', 'cacheWrite', 'contextEstimate'].every(key =>
       usage[key] === undefined || Number.isSafeInteger(usage[key]) && usage[key] >= 0) &&
     (usage.partial === undefined || typeof usage.partial === 'boolean');
+}
+function validTranscriptResult(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) && boundedString(value.requestId, 100) &&
+    boundedString(value.instanceId, 100) && boundedString(value.sessionId, 200) && typeof value.available === 'boolean' && typeof value.partial === 'boolean' &&
+    Array.isArray(value.messages) && value.messages.length <= 50 && value.messages.every(message => message &&
+      (message.id === undefined || boundedString(message.id, 200)) && ['user', 'assistant', 'unknown'].includes(message.role) &&
+      (message.timestamp === null || validTimestamp(message.timestamp)) && Array.isArray(message.parts) && message.parts.length <= 100 &&
+      message.parts.every(part => part && (part.type === 'text' && boundedString(part.text, 8000) ||
+        part.type === 'tool' && boundedString(part.name, 100) && ['pending', 'running', 'completed', 'error', 'unknown'].includes(part.status) ||
+        part.type === 'attachment' && part.available === false)));
 }
 function validTimestamp(value) { return value === null || boundedString(value, 40) && Number.isFinite(Date.parse(value)); }
 function validObservabilityEvent(event, reportInstanceId) {
@@ -90,6 +100,7 @@ function validReport(v) {
   return v && typeof v.instanceId === 'string' && v.instanceId.length <= 100 &&
     (v.eventsPartial === undefined || typeof v.eventsPartial === 'boolean') &&
     (v.unassignedFileChangesPartial === undefined || typeof v.unassignedFileChangesPartial === 'boolean') &&
+    (v.transcriptEnabled === undefined || typeof v.transcriptEnabled === 'boolean') &&
     (v.machineId === undefined || boundedString(v.machineId, 100)) && boundedString(v.host, 200) &&
     (v.generationStartedAt === undefined || Number.isFinite(v.generationStartedAt)) &&
     (v.pid === undefined || Number.isInteger(v.pid)) &&
@@ -127,9 +138,13 @@ function validReport(v) {
      (v.lspHealth === undefined || validLspHealth(v.lspHealth)) &&
      eventsValid && (v.timeline === undefined || validTimeline(v.timeline));
 }
-export function createServer({ token, now = Date.now } = {}) {
+export function createServer({ token, transcriptToken = process.env.AGENTDASHBOARD_TRANSCRIPT_TOKEN, trustProxy = process.env.AGENTDASHBOARD_TRUSTED_PROXY === '1', now = Date.now } = {}) {
   if (token && token.length < 24) throw new Error('AGENTDASHBOARD_TOKEN must contain at least 24 characters');
+  if (transcriptToken && transcriptToken.length < 24) throw new Error('AGENTDASHBOARD_TRANSCRIPT_TOKEN must contain at least 24 characters');
+  if (transcriptToken && transcriptToken === token) throw new Error('AGENTDASHBOARD_TRANSCRIPT_TOKEN must be separate from the read-only token');
   const instances = new Map();
+  const transcriptRequests = new Map();
+  const transcriptResults = new Map();
   let revision = 0;
   let lastPrune = 0;
   const prune = (force = false) => {
@@ -204,6 +219,18 @@ export function createServer({ token, now = Date.now } = {}) {
       count--;
     }
   };
+  const cleanupTranscriptState = () => {
+    const time = now();
+    for (const [id, request] of transcriptRequests) if (request.expiresAt <= time) transcriptRequests.delete(id);
+    for (const [id, result] of transcriptResults) if (result.expiresAt <= time) transcriptResults.delete(id);
+  };
+  const canReadTranscripts = req => Boolean(transcriptToken && equal(req.headers['x-agentdashboard-transcript-token'], transcriptToken) &&
+    (!token || req.socket?.encrypted || trustProxy && req.headers['x-forwarded-proto'] === 'https'));
+  const readJson = async (req, limit) => {
+    let size = 0; const chunks = [];
+    for await (const chunk of req) { size += chunk.length; if (size > limit) throw new RangeError('request body too large'); chunks.push(chunk); }
+    return JSON.parse(Buffer.concat(chunks).toString());
+  };
   return http.createServer(async (req, res) => {
     const reply = (status, data) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(data)); };
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -223,6 +250,74 @@ export function createServer({ token, now = Date.now } = {}) {
       if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}` && req.headers.origin !== `https://${req.headers.host}`) return reply(403, { error: 'Cross-origin request rejected' });
       if (req.headers['sec-fetch-site'] === 'cross-site') return reply(403, { error: 'Cross-site request rejected' });
       prune();
+      cleanupTranscriptState();
+      if (path === '/api/transcript/request' && req.method === 'POST') {
+        if (!canReadTranscripts(req)) return reply(403, { error: 'Session transcript access is disabled or unauthorized' });
+        try {
+          const value = await readJson(req, 4096);
+          if (!value || typeof value.instanceId !== 'string' || value.instanceId.length > 100 ||
+              typeof value.sessionId !== 'string' || value.sessionId.length > 200 || value.limit !== undefined && value.limit !== 50) {
+            return reply(400, { error: 'Invalid transcript request' });
+          }
+          const instance = instances.get(value.instanceId);
+          const session = instance?.sessions.find(item => item.id === value.sessionId);
+          if (!instance || now() - instance.lastSeen >= 20000 || instance.replaced || !instance.transcriptEnabled || !session || session.archived) {
+            return reply(404, { error: 'Session transcript unavailable' });
+          }
+          const existing = [...transcriptRequests.values()].find(item => item.instanceId === value.instanceId && item.sessionId === value.sessionId);
+          if (existing) return reply(202, { requestId: existing.requestId, expiresAt: existing.expiresAt });
+          if (transcriptRequests.size >= 20 || [...transcriptRequests.values()].filter(item => item.instanceId === value.instanceId).length >= 2) {
+            return reply(429, { error: 'Transcript request queue is busy' });
+          }
+          const requestId = randomUUID(), expiresAt = now() + 15000;
+          transcriptRequests.set(requestId, { requestId, instanceId: value.instanceId, sessionId: value.sessionId, expiresAt });
+          return reply(202, { requestId, expiresAt });
+        } catch (error) { return reply(error instanceof RangeError ? 413 : 400, { error: 'Invalid transcript request' }); }
+      }
+      if (path === '/api/transcript/cancel' && req.method === 'POST') {
+        if (!canReadTranscripts(req)) return reply(403, { error: 'Session transcript access is disabled or unauthorized' });
+        try {
+          const value = await readJson(req, 4096);
+          const request = transcriptRequests.get(value?.requestId);
+          if (!request || request.instanceId !== value.instanceId || request.sessionId !== value.sessionId) return reply(404, { error: 'Transcript request unavailable' });
+          transcriptRequests.delete(value.requestId); transcriptResults.delete(value.requestId);
+          return reply(200, { ok: true });
+        } catch (error) { return reply(error instanceof RangeError ? 413 : 400, { error: 'Invalid transcript cancellation' }); }
+      }
+      if (path === '/api/transcript/result' && req.method === 'GET') {
+        if (!canReadTranscripts(req)) return reply(403, { error: 'Session transcript access is disabled or unauthorized' });
+        const requestId = new URL(req.url, 'http://localhost').searchParams.get('requestId');
+        if (!requestId) return reply(400, { error: 'Missing transcript request ID' });
+        const result = transcriptResults.get(requestId);
+        if (result) {
+          transcriptResults.delete(requestId);
+          const { expiresAt, ...payload } = result;
+          return reply(200, payload);
+        }
+        if (transcriptRequests.has(requestId)) return reply(202, { pending: true, expiresAt: transcriptRequests.get(requestId).expiresAt });
+        return reply(404, { error: 'Transcript request expired or unavailable' });
+      }
+      if (path === '/api/transcript/result' && req.method === 'POST') {
+        if (!canReadTranscripts(req)) return reply(403, { error: 'Session transcript access is disabled or unauthorized' });
+        try {
+          const result = await readJson(req, 256 * 1024);
+          if (!validTranscriptResult(result)) return reply(400, { error: 'Invalid transcript response' });
+          const request = transcriptRequests.get(result.requestId);
+          if (!request || request.expiresAt <= now() || request.instanceId !== result.instanceId || request.sessionId !== result.sessionId) {
+            return reply(404, { error: 'Transcript request expired or mismatched' });
+          }
+          const instance = instances.get(request.instanceId);
+          if (!instance || now() - instance.lastSeen >= 20000 || instance.replaced || !instance.transcriptEnabled ||
+              !instance.sessions.some(session => session.id === request.sessionId && !session.archived)) {
+            transcriptRequests.delete(result.requestId);
+            return reply(404, { error: 'Transcript session is no longer available' });
+          }
+          if (transcriptResults.size >= 20 && !transcriptResults.has(result.requestId)) return reply(429, { error: 'Transcript response queue is busy' });
+          transcriptRequests.delete(result.requestId);
+          transcriptResults.set(result.requestId, { ...result, expiresAt: now() + 30000 });
+          return reply(200, { ok: true });
+        } catch (error) { return reply(error instanceof RangeError ? 413 : 400, { error: 'Invalid transcript response' }); }
+      }
       if (path === '/api/state' && req.method === 'GET') {
         const time = now();
         for (const instance of instances.values()) {
@@ -312,7 +407,10 @@ export function createServer({ token, now = Date.now } = {}) {
             }
           }
           if (meaningfulChange || !replaced && !online) revision++;
-          return reply(200, { ok: true });
+          const transcriptRequestsForInstance = v.transcriptEnabled ? [...transcriptRequests.values()]
+            .filter(item => item.instanceId === v.instanceId && item.expiresAt > now())
+            .map(({ requestId, sessionId, expiresAt }) => ({ requestId, sessionId, expiresAt, limit: 50 })) : [];
+          return reply(200, { ok: true, ...(transcriptRequestsForInstance.length ? { transcriptRequests: transcriptRequestsForInstance } : {}) });
         } catch { return reply(400, { error: 'Invalid JSON report' }); }
       }
       return reply(404, { error: 'Unknown endpoint' });
@@ -325,10 +423,14 @@ export function createServer({ token, now = Date.now } = {}) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const token = process.env.AGENTDASHBOARD_TOKEN;
+    const transcriptToken = process.env.AGENTDASHBOARD_TRANSCRIPT_TOKEN;
+    const trustProxy = process.env.AGENTDASHBOARD_TRUSTED_PROXY === '1';
     const configuredHost = process.env.AGENTDASHBOARD_HOST;
     const configuredPort = process.env.AGENTDASHBOARD_PORT;
-    const host = token ? (configuredHost || '0.0.0.0') : '127.0.0.1';
-    const server = createServer({ token });
+    const loopback = ['127.0.0.1', 'localhost', '::1'].includes(configuredHost || '127.0.0.1');
+    if (trustProxy && token && transcriptToken && !loopback) throw new Error('Trusted transcript proxy mode must bind the companion to loopback');
+    const host = token ? (configuredHost || (trustProxy && transcriptToken ? '127.0.0.1' : '0.0.0.0')) : '127.0.0.1';
+    const server = createServer({ token, transcriptToken, trustProxy });
     server.requestTimeout = 10000;
     server.on('error', error => { console.error(`Companion failed: ${error.message}`); process.exitCode = 1; });
     server.listen(Number(configuredPort || 4317), host, () => console.log(`AgentDashboard ${token ? 'network (token required)' : 'local (no token)'} mode listening on ${host}:${configuredPort || 4317}`));
